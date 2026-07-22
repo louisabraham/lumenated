@@ -25,16 +25,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Music search/download. NOTE: on machines whose endpoint security quarantines
-# yt-dlp's cookies.py (browser-cookie extractor), install yt-dlp via
+# Music search/download (for the reactive/music modes). NOTE: on machines whose endpoint
+# security quarantines yt-dlp's cookies.py (browser-cookie extractor), install yt-dlp via
 # tools/install_ytdlp_stub.py instead of letting pip pull it here.
 music = ["ytmusicapi>=1.7", "yt-dlp>=2024.0"]
-tui = ["textual>=0.60", "ytmusicapi>=1.7", "yt-dlp>=2024.0"]
-all = ["lumenated[tui]"]
+all = ["lumenated[music]"]
 
 [project.scripts]
 lumenated = "lumenated.cli:main"
-lumenated-tui = "lumenated.tui:main"
+lumenated-play = "lumenated.wizard:main"
 
 [project.urls]
 Homepage = "https://github.com/louisabraham/lumenated"

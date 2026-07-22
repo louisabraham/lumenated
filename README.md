@@ -23,7 +23,7 @@ Not affiliated with, authorized, or endorsed by Lumenate. See **[License & legal
 - `apk/` — pulled APK + decompiled sources (gitignored; large)
 - `captures/` — HCI snoop logs and analysis (gitignored)
 - `docs/PROTOCOL.md` — the protocol documentation
-- `lumenated/` — the installable Python package (control library, generator, music TUI)
+- `lumenated/` — the installable Python package (control library, generator, interactive player)
 
 ## Method
 
@@ -37,8 +37,8 @@ Not affiliated with, authorized, or endorsed by Lumenate. See **[License & legal
 ```bash
 pip install lumenated                 # once published to PyPI
 # or, from a clone of this repo:
-pip install -e .                      # core (bleak + numpy): control + generator
-pip install -e ".[tui]"               # + the music TUI (textual, ytmusicapi, yt-dlp)
+pip install -e .                      # core (bleak + numpy): control + generator + player
+pip install -e ".[music]"             # + music search/download (ytmusicapi, yt-dlp)
 ```
 
 > **yt-dlp + endpoint security:** yt-dlp bundles `cookies.py` (a browser-cookie extractor)
@@ -67,16 +67,22 @@ lumenated generate relax 10             # generated 10-min 'relax' light arc
 lumenated generate explore 12 song.mp3  # preset light alongside your music
 lumenated reactive song.mp3             # light reacts to a music file (duty <- envelope)
 lumenated iso explore 8                 # generated isochronic tones + matched light
-lumenated-tui                           # keyboard TUI: search + download music, run a session
 # presets: relax | sleep | explore | energize
 ```
 
-TUI keys: `/` search · `↑↓`/`j`/`k` move · `Enter` select/run · `m` mode · `p` preset ·
-`d` length · `s` stop · `r` recommended · `q` quit.
+### Interactive player (recommended)
+
+```bash
+lumenated-play
+```
+
+A minimal, keyboard-only wizard — one question at a time: **mode → (music, only for audio
+modes) → preset → length → connect the Nova → press its power button to start** (and again to
+stop), just like the app. Pairing is the last step and includes instructions + a retry loop.
 
 - `lumenated/core.py` — control library (strobe, commands, motion sensor, DSL session player).
 - `lumenated/generator.py` — presets, audio-reactive mode, isochronic synth.
-- `lumenated/music.py` + `lumenated/tui.py` — YouTube-Music search/download + a Textual TUI.
+- `lumenated/music.py` — YouTube-Music search/download; `lumenated/wizard.py` — the player.
 - `docs/PROTOCOL.md` — the full BLE protocol + session content DSL.
 - `docs/GENERATOR_DESIGN.md` — science-backed guide for the light/sound generator.
 
@@ -127,7 +133,7 @@ and the decompiled app's in-app help strings.
 
 ## License & legal
 
-The original work in this repository — the Python code (`nova/`, `tools/`) and the documentation
+The original work in this repository — the Python code (`lumenated/`, `tools/`) and the documentation
 (`docs/`, this README) — is released under the **MIT License** (see [LICENSE](LICENSE)).
 
 - **Independent & unofficial.** This is interoperability reverse-engineering of a device the
