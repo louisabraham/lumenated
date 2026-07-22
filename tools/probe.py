@@ -9,7 +9,6 @@ import asyncio
 import struct
 import sys
 
-sys.path.insert(0, "nova")
 from bleak import BleakScanner, BleakClient
 
 STROBE_RATE_CFG = "abcdef01-2345-6789-abcd-ef0123456789"  # t0 "streaming data rate"

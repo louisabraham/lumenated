@@ -1,0 +1,39 @@
+# Publish to PyPI — INTENTIONALLY INACTIVE.
+#
+# This workflow will NOT publish anything until you deliberately enable it:
+#   1. On PyPI, create the project and add a "Trusted Publisher" for this repo +
+#      workflow file (Publishing -> add GitHub as a trusted publisher).
+#   2. In the GitHub repo, create a variable  PYPI_PUBLISH_ENABLED = true
+#      (Settings -> Secrets and variables -> Actions -> Variables).
+#   3. (Optional) switch the trigger below to `release: types: [published]`
+#      so a GitHub Release publishes automatically.
+#
+# As written it only runs on a manual dispatch, and even then the job is skipped
+# unless PYPI_PUBLISH_ENABLED == 'true'. So merging this file does nothing on its own.
+
+name: Publish to PyPI (inactive)
+
+on:
+  workflow_dispatch:
+  # release:
+  #   types: [published]
+
+jobs:
+  publish:
+    # Guard: stays skipped until you opt in with the repo variable above.
+    if: ${{ vars.PYPI_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC for PyPI Trusted Publishing (no token secret needed)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

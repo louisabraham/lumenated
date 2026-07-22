@@ -9,9 +9,8 @@ import asyncio
 import math
 import sys
 
-sys.path.insert(0, "nova")
 from bleak import BleakScanner, BleakClient
-from nova import Nova
+from lumenated.core import Nova  # pip install -e . first
 
 
 async def catch_connect(secs=60.0):

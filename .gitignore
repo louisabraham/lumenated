@@ -5,3 +5,10 @@ __pycache__/
 .venv/
 *.log
 *.apk
+music/
+
+# build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/

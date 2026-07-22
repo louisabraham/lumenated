@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lumenated"
+version = "0.1.0"
+description = "Control the Lumenate Nova light mask over BLE, with a science-backed light/sound session generator. Independent and unofficial."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Louis Abraham" }]
+keywords = ["bluetooth", "ble", "lumenate", "nova", "strobe", "brainwave", "entrainment", "flicker"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Intended Audience :: Developers",
+]
+dependencies = [
+    "bleak>=0.21",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Music search/download. NOTE: on machines whose endpoint security quarantines
+# yt-dlp's cookies.py (browser-cookie extractor), install yt-dlp via
+# tools/install_ytdlp_stub.py instead of letting pip pull it here.
+music = ["ytmusicapi>=1.7", "yt-dlp>=2024.0"]
+tui = ["textual>=0.60", "ytmusicapi>=1.7", "yt-dlp>=2024.0"]
+all = ["lumenated[tui]"]
+
+[project.scripts]
+lumenated = "lumenated.cli:main"
+lumenated-tui = "lumenated.tui:main"
+
+[project.urls]
+Homepage = "https://github.com/louisabraham/lumenated"
+Repository = "https://github.com/louisabraham/lumenated"
+"Protocol docs" = "https://github.com/louisabraham/lumenated/blob/main/docs/PROTOCOL.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lumenated"]
+
+[tool.hatch.build.targets.sdist]
+include = ["lumenated", "docs", "tools", "README.md", "LICENSE"]

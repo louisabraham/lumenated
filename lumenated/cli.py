@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
-"""Demo CLI for controlling a Lumenate Nova from the Mac.
+"""Command-line control for a Lumenate Nova.
 
-Examples:
-    python3 nova/demo.py scan                 # find advertising Novas
-    python3 nova/demo.py info                 # connect, print device info
-    python3 nova/demo.py welcome              # trigger the greeting LED animation
-    python3 nova/demo.py strobe 10 0.3        # steady 10 Hz, 30% duty (Ctrl-C to stop)
-    python3 nova/demo.py ramp                 # sweep frequency/intensity for ~20s
-    python3 nova/demo.py monitor              # subscribe to buttons/sensor/battery
-    python3 nova/demo.py session              # play a built-in DSL session
-    python3 nova/demo.py session my.txt       # play a session DSL from a file
-    python3 nova/demo.py generate relax 10    # play a generated 10-min 'relax' preset
-    python3 nova/demo.py generate relax 10 song.mp3   # preset light + your audio
-    python3 nova/demo.py reactive song.mp3    # light reacts to a music file
-    python3 nova/demo.py iso explore 8        # generated isochronic tones + matched light
-    python3 nova/demo.py offline 0            # start a standalone RELAXED session
+Examples (installed as the `lumenated` console script):
+    lumenated scan                 # find advertising Novas
+    lumenated info                 # connect, print device info
+    lumenated welcome              # trigger the greeting LED animation
+    lumenated strobe 10 0.3        # steady 10 Hz, 30% duty (Ctrl-C to stop)
+    lumenated ramp                 # sweep frequency/intensity for ~20s
+    lumenated monitor              # subscribe to buttons/sensor/battery
+    lumenated session              # play a built-in DSL session
+    lumenated session my.txt       # play a session DSL from a file
+    lumenated generate relax 10    # play a generated 10-min 'relax' preset
+    lumenated generate relax 10 song.mp3   # preset light + your audio
+    lumenated reactive song.mp3    # light reacts to a music file
+    lumenated iso explore 8        # generated isochronic tones + matched light
+    lumenated offline 0            # start a standalone RELAXED session
 
 Presets: relax, sleep, explore, energize.  Add --device <addr> to target a specific Nova.
-
-Add an address as the last arg to target a specific device (from `scan`):
-    python3 nova/demo.py strobe 10 0.3 <ADDRESS>
-
-Requires: pip install bleak
+(Also runnable as `python3 -m lumenated`.)
 """
 import asyncio
 import math
 import sys
 
-from nova import Nova, decode_strobe_frame, strobe_frame
+from .core import Nova, decode_strobe_frame, strobe_frame
 
 # A short original demo session in the Nova DSL (see docs/PROTOCOL.md §10):
 # fade in, hold at a calm theta ~6.5 Hz, breathe up toward ~12 Hz, settle, fade out.
@@ -145,7 +141,7 @@ def _mk_tick():
 
 
 async def cmd_generate(addr, preset, minutes, audio):
-    import generator as gen
+    from . import generator as gen
     if preset not in gen.PRESETS:
         print("presets:", ", ".join(gen.PRESETS)); return
     segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()
@@ -163,7 +159,7 @@ async def cmd_generate(addr, preset, minutes, audio):
 
 
 async def cmd_reactive(addr, audio):
-    import generator as gen
+    from . import generator as gen
     async with await Nova.connect(addr) as nova:
         print(f"audio-reactive light from {audio}  (Ctrl-C to stop)")
         try:
@@ -174,7 +170,8 @@ async def cmd_reactive(addr, audio):
 
 
 async def cmd_iso(addr, preset, minutes):
-    import generator as gen, tempfile, os
+    from . import generator as gen
+    import tempfile, os
     if preset not in gen.PRESETS:
         print("presets:", ", ".join(gen.PRESETS)); return
     segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()

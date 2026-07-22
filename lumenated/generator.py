@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from nova import Nova, Segment, sample_session, session_duration
+from .core import Nova, Segment, sample_session, session_duration
 
 # --- safety / sanity clamps (docs/GENERATOR_DESIGN.md §5) ---
 FREQ_MIN, FREQ_MAX = 1.0, 18.0      # never exceed the studied range

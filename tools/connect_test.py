@@ -8,7 +8,6 @@ Keep the Nova awake (press its power button) while this runs.
 import asyncio
 import sys
 
-sys.path.insert(0, "nova")
 from bleak import BleakScanner, BleakClient
 
 

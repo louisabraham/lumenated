@@ -22,8 +22,8 @@ Not affiliated with, authorized, or endorsed by Lumenate. See **[License & legal
   - `enumerate.py` — connect to the Nova and dump all GATT services/characteristics
 - `apk/` — pulled APK + decompiled sources (gitignored; large)
 - `captures/` — HCI snoop logs and analysis (gitignored)
-- `docs/PROTOCOL.md` — the protocol documentation (the deliverable)
-- `nova/` — the Python control library + demo (the other deliverable)
+- `docs/PROTOCOL.md` — the protocol documentation
+- `lumenated/` — the installable Python package (control library, generator, music TUI)
 
 ## Method
 
@@ -32,36 +32,50 @@ Not affiliated with, authorized, or endorsed by Lumenate. See **[License & legal
    pull `btsnoop_hci.log`, read GATT writes/notifications in Wireshark/tshark.
 3. **Confirm**: connect from the Mac with bleak, replay/adapt commands, build the demo.
 
+## Install
+
+```bash
+pip install lumenated                 # once published to PyPI
+# or, from a clone of this repo:
+pip install -e .                      # core (bleak + numpy): control + generator
+pip install -e ".[tui]"               # + the music TUI (textual, ytmusicapi, yt-dlp)
+```
+
+> **yt-dlp + endpoint security:** yt-dlp bundles `cookies.py` (a browser-cookie extractor)
+> that some EDRs (e.g. SentinelOne) quarantine, which breaks a normal `pip install`. If that
+> happens, install yt-dlp with `python3 tools/install_ytdlp_stub.py` — it installs a build
+> with a **benign, no-browser-access** cookies module (public downloads still work), so nothing
+> flagged is written. On a managed device, prefer an IT-approved exclusion.
+
 ## Quickstart (control from the Mac)
 
 ```bash
-pip install bleak
-# In the Lumenate app: Nova settings -> "Forget this Nova" (releases the phone bond).
-python3 nova/demo.py scan          # find the Nova
-python3 nova/demo.py info          # model/fw/serial/battery
-python3 nova/demo.py welcome       # greeting LED animation
-python3 nova/demo.py strobe 10 0.3 # steady 10 Hz, 30% duty
-python3 nova/demo.py ramp          # 7->14 Hz sweep with breathing intensity
-python3 nova/demo.py monitor       # subscribe to buttons/motion sensor/battery
-python3 nova/demo.py session       # play a built-in light "score" (DSL)
-python3 tools/live_show.py         # scripted end-to-end demo
+# In the Lumenate app: Nova settings -> "Forget this Nova", then power it to flashing blue (pairing).
+lumenated scan            # find the Nova
+lumenated info            # model / fw / serial / battery
+lumenated welcome         # greeting LED animation
+lumenated strobe 10 0.3   # steady 10 Hz, 30% duty
+lumenated ramp            # 7->14 Hz sweep with breathing intensity
+lumenated monitor         # subscribe to buttons / motion sensor / battery
+lumenated session         # play a built-in light "score" (DSL)
 ```
 
 ### Session generator (light + sound)
 
 ```bash
-python3 nova/demo.py generate relax 10          # generated 10-min 'relax' light arc
-python3 nova/demo.py generate explore 12 song.mp3   # preset light alongside your music
-python3 nova/demo.py reactive song.mp3          # light reacts to a music file (duty <- envelope)
-python3 nova/demo.py iso explore 8              # generated isochronic tones + matched light
+lumenated generate relax 10             # generated 10-min 'relax' light arc
+lumenated generate explore 12 song.mp3  # preset light alongside your music
+lumenated reactive song.mp3             # light reacts to a music file (duty <- envelope)
+lumenated iso explore 8                 # generated isochronic tones + matched light
+lumenated-tui                           # TUI: search + download music, then run a session
 # presets: relax | sleep | explore | energize
 ```
 
+- `lumenated/core.py` — control library (strobe, commands, motion sensor, DSL session player).
+- `lumenated/generator.py` — presets, audio-reactive mode, isochronic synth.
+- `lumenated/music.py` + `lumenated/tui.py` — YouTube-Music search/download + a Textual TUI.
 - `docs/PROTOCOL.md` — the full BLE protocol + session content DSL.
 - `docs/GENERATOR_DESIGN.md` — science-backed guide for the light/sound generator.
-- `nova/nova.py` — control library (strobe, commands, motion sensor, DSL session player).
-- `nova/generator.py` — session generator: presets, audio-reactive mode, isochronic synth.
-- *Planned:* a terminal UI to search (ytmusicapi) + fetch (yt-dlp) music and run sessions.
 
 The reverse-engineering `tools/` require a decompiled APK and BLE captures; **those are not
 included** in this repo (see License & legal) — regenerate them from your own device/app.
