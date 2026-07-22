@@ -1,10 +1,16 @@
-# openlumenate
+# lumenated
 
-Reverse-engineering the BLE protocol of the **Lumenate Nova** light/sound device,
-to control it from a Mac (and document the protocol) independently of the official
-Android/iOS app.
+Independent, unofficial reverse-engineering of the BLE protocol of the **Lumenate Nova**
+light/sound mask — a documented protocol, a Python control library, and a science-backed
+light/sound *session generator*, so you can drive a Nova you own from your own computer.
 
-Scope: interoperability with a device I own, for personal use.
+Not affiliated with, authorized, or endorsed by Lumenate. See **[License & legal](#license--legal)**.
+
+> ⚠️ **Photosensitivity / seizure risk.** This drives a bright stroboscope in the 7–18 Hz
+> range, which overlaps the band that can trigger seizures in people with photosensitive
+> epilepsy. Do not use if you (or anyone exposed) are photosensitive, pregnant, or under 18
+> without medical advice; never shine it into someone's eyes as a "test"; keep an instant
+> stop reachable. Use at your own risk — no warranty (see LICENSE).
 
 ## Layout
 
@@ -41,12 +47,24 @@ python3 nova/demo.py session       # play a built-in light "score" (DSL)
 python3 tools/live_show.py         # scripted end-to-end demo
 ```
 
-- `docs/PROTOCOL.md` — the full BLE protocol + session content DSL.
-- `docs/GENERATOR_DESIGN.md` — science-backed guide for building a light/sound session generator.
-- `nova/nova.py` — reusable control library (strobe, commands, motion sensor, DSL session player).
+### Session generator (light + sound)
 
-⚠️ **Photosensitivity:** this drives a bright stroboscope at 7–14 Hz — a flicker range that
-can trigger seizures in photosensitive people. Don't point it at someone's eyes during testing.
+```bash
+python3 nova/demo.py generate relax 10          # generated 10-min 'relax' light arc
+python3 nova/demo.py generate explore 12 song.mp3   # preset light alongside your music
+python3 nova/demo.py reactive song.mp3          # light reacts to a music file (duty <- envelope)
+python3 nova/demo.py iso explore 8              # generated isochronic tones + matched light
+# presets: relax | sleep | explore | energize
+```
+
+- `docs/PROTOCOL.md` — the full BLE protocol + session content DSL.
+- `docs/GENERATOR_DESIGN.md` — science-backed guide for the light/sound generator.
+- `nova/nova.py` — control library (strobe, commands, motion sensor, DSL session player).
+- `nova/generator.py` — session generator: presets, audio-reactive mode, isochronic synth.
+- *Planned:* a terminal UI to search (ytmusicapi) + fetch (yt-dlp) music and run sessions.
+
+The reverse-engineering `tools/` require a decompiled APK and BLE captures; **those are not
+included** in this repo (see License & legal) — regenerate them from your own device/app.
 
 ## Device buttons & LED states
 
@@ -89,3 +107,22 @@ and the decompiled app's in-app help strings.
 ## Status
 
 ✅ Protocol reverse-engineered and Mac control verified on hardware. See `docs/PROGRESS.md`.
+
+## License & legal
+
+The original work in this repository — the Python code (`nova/`, `tools/`) and the documentation
+(`docs/`, this README) — is released under the **MIT License** (see [LICENSE](LICENSE)).
+
+- **Independent & unofficial.** This is interoperability reverse-engineering of a device the
+  author owns, done for personal use and research. It is **not** affiliated with, authorized by,
+  or endorsed by Lumenate. "Lumenate" and "Nova" are trademarks of their respective owner, used
+  here only for identification (nominative fair use).
+- **No Lumenate code, firmware, or assets are included or distributed.** The decompiled app, the
+  APK, and the Bluetooth captures used during analysis are deliberately **not** committed (they're
+  in `.gitignore`). Regenerate them from your own device and app copy with the scripts in `tools/`.
+- **Facts vs. expression.** The protocol details documented here (UUIDs, byte layouts, value
+  encodings) are factual interoperability information and are not themselves copyrightable; the
+  MIT license covers only this repo's original code and prose.
+- **No warranty.** Provided "as is". You are responsible for safe and lawful use — including the
+  photosensitive-seizure risk described above and not attempting firmware modification (the DFU
+  path is documented but untested and can brick the device).

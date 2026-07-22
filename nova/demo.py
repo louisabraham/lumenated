@@ -10,7 +10,13 @@ Examples:
     python3 nova/demo.py monitor              # subscribe to buttons/sensor/battery
     python3 nova/demo.py session              # play a built-in DSL session
     python3 nova/demo.py session my.txt       # play a session DSL from a file
+    python3 nova/demo.py generate relax 10    # play a generated 10-min 'relax' preset
+    python3 nova/demo.py generate relax 10 song.mp3   # preset light + your audio
+    python3 nova/demo.py reactive song.mp3    # light reacts to a music file
+    python3 nova/demo.py iso explore 8        # generated isochronic tones + matched light
     python3 nova/demo.py offline 0            # start a standalone RELAXED session
+
+Presets: relax, sleep, explore, energize.  Add --device <addr> to target a specific Nova.
 
 Add an address as the last arg to target a specific device (from `scan`):
     python3 nova/demo.py strobe 10 0.3 <ADDRESS>
@@ -130,6 +136,60 @@ async def cmd_session(addr, path):
     print("done")
 
 
+def _mk_tick():
+    def tick(t, freq, duty, dur):
+        if int(t * 10) % 10 == 0:
+            bar = "#" * int(duty * 20)
+            print(f"  t={t:6.1f}/{dur:.0f}s  {freq:5.2f} Hz  duty {duty*100:4.1f}% {bar}")
+    return tick
+
+
+async def cmd_generate(addr, preset, minutes, audio):
+    import generator as gen
+    if preset not in gen.PRESETS:
+        print("presets:", ", ".join(gen.PRESETS)); return
+    segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()
+    async with await Nova.connect(addr) as nova:
+        print(f"generating '{preset}' ({gen.session_duration(segs):.0f}s)"
+              + (f" + audio {audio}" if audio else "") + "  (Ctrl-C to stop)")
+        try:
+            if audio:
+                await gen.play_with_audio(nova, segs, audio, on_tick=_mk_tick())
+            else:
+                await gen.play_segments(nova, segs, on_tick=_mk_tick())
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    print("done")
+
+
+async def cmd_reactive(addr, audio):
+    import generator as gen
+    async with await Nova.connect(addr) as nova:
+        print(f"audio-reactive light from {audio}  (Ctrl-C to stop)")
+        try:
+            await gen.play_reactive(nova, audio, on_tick=_mk_tick())
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    print("done")
+
+
+async def cmd_iso(addr, preset, minutes):
+    import generator as gen, tempfile, os
+    if preset not in gen.PRESETS:
+        print("presets:", ", ".join(gen.PRESETS)); return
+    segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()
+    wav = os.path.join(tempfile.gettempdir(), f"nova_iso_{preset}.wav")
+    print(f"synthesising phase-locked isochronic audio -> {wav}")
+    gen.synth_isochronic(segs, wav)
+    async with await Nova.connect(addr) as nova:
+        print(f"playing '{preset}' with generated tones  (Ctrl-C to stop)")
+        try:
+            await gen.play_with_audio(nova, segs, wav, on_tick=_mk_tick())
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    print("done")
+
+
 async def cmd_offline(addr, mode):
     async with await Nova.connect(addr) as nova:
         try:
@@ -141,19 +201,32 @@ async def cmd_offline(addr, mode):
         await asyncio.sleep(2.0)
 
 
+def _is_float(s):
+    try:
+        float(s); return True
+    except (TypeError, ValueError):
+        return False
+
+
 def main():
     args = sys.argv[1:]
     if not args:
         print(__doc__)
         return
     cmd = args[0]
-
-    # optional trailing address
-    addr = None
     rest = args[1:]
-    if rest and ":" in rest[-1] or (rest and len(rest[-1]) >= 30):
-        addr = rest[-1]
-        rest = rest[:-1]
+
+    # explicit device selector (works for every command)
+    addr = None
+    if "--device" in rest:
+        i = rest.index("--device")
+        addr = rest[i + 1]
+        del rest[i:i + 2]
+    # legacy: a trailing CoreBluetooth-UUID / MAC address for the simple commands
+    elif rest and (":" in rest[-1] or len(rest[-1]) >= 30) and not _is_float(rest[-1]):
+        if cmd in {"info", "welcome", "strobe", "ramp", "monitor", "offline"}:
+            addr = rest[-1]
+            rest = rest[:-1]
 
     if cmd == "scan":
         asyncio.run(cmd_scan())
@@ -172,6 +245,24 @@ def main():
     elif cmd == "session":
         path = rest[0] if rest else None
         asyncio.run(cmd_session(addr, path))
+    elif cmd == "generate":
+        preset = rest[0] if rest else "relax"
+        minutes = None
+        audio = None
+        for a in rest[1:]:
+            if _is_float(a):
+                minutes = float(a)
+            else:
+                audio = a
+        asyncio.run(cmd_generate(addr, preset, minutes, audio))
+    elif cmd == "reactive":
+        if not rest:
+            print("usage: reactive <audiofile>"); return
+        asyncio.run(cmd_reactive(addr, rest[0]))
+    elif cmd == "iso":
+        preset = rest[0] if rest else "relax"
+        minutes = float(rest[1]) if len(rest) > 1 and _is_float(rest[1]) else None
+        asyncio.run(cmd_iso(addr, preset, minutes))
     elif cmd == "offline":
         mode = int(rest[0]) if rest else 0
         asyncio.run(cmd_offline(addr, mode))
