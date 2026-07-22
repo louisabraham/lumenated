@@ -8,6 +8,8 @@ Examples:
     python3 nova/demo.py strobe 10 0.3        # steady 10 Hz, 30% duty (Ctrl-C to stop)
     python3 nova/demo.py ramp                 # sweep frequency/intensity for ~20s
     python3 nova/demo.py monitor              # subscribe to buttons/sensor/battery
+    python3 nova/demo.py session              # play a built-in DSL session
+    python3 nova/demo.py session my.txt       # play a session DSL from a file
     python3 nova/demo.py offline 0            # start a standalone RELAXED session
 
 Add an address as the last arg to target a specific device (from `scan`):
@@ -20,6 +22,18 @@ import math
 import sys
 
 from nova import Nova, decode_strobe_frame, strobe_frame
+
+# A short original demo session in the Nova DSL (see docs/PROTOCOL.md §10):
+# fade in, hold at a calm theta ~6.5 Hz, breathe up toward ~12 Hz, settle, fade out.
+DEMO_SESSION = (
+    "s(0,3,z,z);"
+    "s(3,6,l(4,6.5),l(0.02,0.15));"
+    "s(6,16,c(6.5),c(0.15));"
+    "s(16,20,l(6.5,12),l(0.15,0.45));"
+    "s(20,24,l(12,6.5),l(0.45,0.15));"
+    "s(24,34,c(6.5),c(0.15));"
+    "s(34,38,l(6.5,0),l(0.15,0));"
+)
 
 
 async def cmd_scan():
@@ -99,6 +113,23 @@ async def cmd_monitor(addr):
             pass
 
 
+async def cmd_session(addr, path):
+    dsl = DEMO_SESSION
+    if path:
+        with open(path) as f:
+            dsl = f.read().strip()
+    async with await Nova.connect(addr) as nova:
+        print("playing session (Ctrl-C to stop)…")
+        def tick(t, freq, duty):
+            if int(t * 10) % 10 == 0:
+                print(f"  t={t:5.1f}s  {freq:5.2f} Hz  duty {duty*100:4.1f}%")
+        try:
+            await nova.play_session(dsl, rate_hz=10, on_tick=tick)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    print("done")
+
+
 async def cmd_offline(addr, mode):
     async with await Nova.connect(addr) as nova:
         try:
@@ -138,6 +169,9 @@ def main():
         asyncio.run(cmd_ramp(addr))
     elif cmd == "monitor":
         asyncio.run(cmd_monitor(addr))
+    elif cmd == "session":
+        path = rest[0] if rest else None
+        asyncio.run(cmd_session(addr, path))
     elif cmd == "offline":
         mode = int(rest[0]) if rest else 0
         asyncio.run(cmd_offline(addr, mode))

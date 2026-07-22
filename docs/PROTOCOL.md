@@ -55,13 +55,13 @@ Full table read from the connected Nova. **Address by UUID** (handles vary by fi
 | Char UUID | Props | Role |
 |---|---|---|
 | `f2c51a4e-2a46-4bef-b18f-cb00c716cfa6` | WWR | **Strobe frames** (the core) |
-| `12345678-9abc-4def-8012-3456789abcde` | notify, read | **Sensor stream** — 3×int16 LE |
-| `abcdef01-2345-6789-abcd-ef0123456789` | WWR | extra strobe/write channel ⓘ (unmapped) |
+| `12345678-9abc-4def-8012-3456789abcde` | notify, read | **Motion sensor** stream — 3×int16 LE ✅ |
+| `abcdef01-2345-6789-abcd-ef0123456789` | WWR | **Motion sample-rate config** — 1 byte ✅ |
 
-### Firmware-update / debug service — `8d53dc1d-1db7-4cd3-868b-8a527460aa84` ⓘ
+### Firmware-update service — `8d53dc1d-1db7-4cd3-868b-8a527460aa84` ⓘ
 | Char UUID | Props | Role |
 |---|---|---|
-| `da2e7828-fbce-4e01-ae9e-261174997c48` | notify, WWR | likely OTA/DFU or diagnostics (not analysed) |
+| `da2e7828-fbce-4e01-ae9e-261174997c48` | notify, WWR | buttonless-DFU entry / OTA (see §11). Not used in normal operation. |
 
 ### Standard
 | Service | Char | Role |
@@ -139,11 +139,16 @@ Notifications on `964fbffe-…` (command service) with format `[0x01, event]`
 Brightness is adjusted device-side via these buttons; it is **not** carried in the strobe
 frame (`color` stays 0), so master brightness lives in the device firmware ⓘ.
 
-## 8. Sensor stream ⓘ
+## 8. Motion sensor ✅
 
-Notifications on `12345678-…` (strobe service), 6 bytes = **3 × signed int16 LE**, streamed at
-the configured rate (~10–12 Hz). Parsed by the app into a 3-tuple (`x, y, z`) — consistent with
-an accelerometer/orientation sensor. Purpose not fully determined.
+The app calls this **"motion detection"** (`G1.j()` logs *"Setting motion detection enabled"*).
+To turn it on:
+1. Write a **1-byte sample rate** to `abcdef01-…` (strobe service). Observed value `0x0a` (=10).
+   Writing `0x00` turns streaming off.
+2. Subscribe to notifications on `12345678-…` (strobe service).
+
+Each notification is 6 bytes = **3 × signed int16 LE** `(x, y, z)` — an accelerometer/orientation
+reading (used to detect head movement during a session). Streamed at ~10–12 Hz.
 
 ## 9. Group sessions
 
@@ -151,10 +156,61 @@ Up to 5 Novas can run in sync from one phone. Mechanically this is just the same
 strobe stream sent to multiple connections with a shared clock (`StrobeManager.syncMe(long)`
 provides the time base) ⓘ.
 
-## 10. Reproduce the analysis
+## 10. Session content format (light "score" DSL) ✅
+
+A guided session's light track is authored as a compact **text DSL** (found in the app's
+session catalogue and parsed by `ib/c.java` into `ib/a`,`ib/b`). This is the *source* the phone
+turns into the strobe frames of §4 — useful if you want to author your own sessions.
+
+A session has **one or two** `;`-separated segment lists — the second (optional) is the
+**right eye**; if omitted, both eyes use the first (symmetric). Each segment:
+
+```
+s(startSec, endSec, freqExpr, dutyExpr [, constantOnExpr, phaseShiftExpr])
+```
+
+Value expressions (each yields a start,end pair that is linearly interpolated across the segment):
+- `c(x)`  — constant `x`
+- `l(a,b)` — linear ramp `a → b`
+- `z`     — zero (off)
+
+`freqExpr` is in **Hz**, `dutyExpr` is a **0–1 fraction**. `constantOn`/`phaseShift` are optional
+(default 0); `phaseShift` drives the per-eye second pulse (the 40-byte asymmetric frame in §4).
+
+Example (real, from the app — a "Breathe" session, left eye):
+```
+s(0,13.6,z,z);                          # 0–13.6s: dark
+s(13.6,16,l(13.5,6.5),c(0.01));         # ramp 13.5→6.5 Hz, 1% duty
+s(16,25,c(6.5),c(0.01));                # hold 6.5 Hz, 1% duty
+s(32,34,l(6.5,7.67),l(0.01,0.11));      # ramp freq & intensity up together
+...                                     # (breathing cycles of ramps up/down)
+```
+
+Playback model: iterate time; within the active segment, linearly interpolate freq & duty, then
+emit a §4 frame (`period=1e6/freq`, `on=period*duty`). See `nova.session` in `nova/nova.py`.
+
+## 11. Firmware update (OTA) ⓘ
+
+Not fully exercised (bricking risk), but the mechanism is clear from the app:
+- The app calls Firebase Cloud Functions **`checkForHeadsetFirmwareUpdate`** (with hardware +
+  firmware version) and **`generateHeadsetFirmwareUpdateURL`** to get a signed firmware download
+  URL (`common/V1.java`). `libsigner.so` handles signing/verification.
+- Update is then pushed over BLE via the **`8d53dc1d-…` / `da2e7828-…`** service (a Nordic-style
+  buttonless-DFU entry that reboots the nRF52833 into its Secure DFU bootloader). **Do not poke
+  this blindly** — a bad DFU can brick the device.
+
+## Reserved / unused characteristics
+
+Present in firmware but **not driven by this app version** (safe to ignore for control):
+`2b35ef1f-…` (command svc), `0x2BED` (battery svc). Their live values weren't captured; read them
+with `tools/probe.py` when the device is awake if you're curious.
+
+## 12. Reproduce the analysis
 
 - `tools/pull_apk.sh` + `tools/decompile.sh` — static analysis (jadx).
 - `tools/snoop_start.sh` / `tools/snoop_pull.sh` / `tools/analyze_snoop.py` — live capture.
+- `tools/connect_test.py`, `tools/probe.py`, `tools/live_show.py` — live device work.
 - Key decompiled classes: `services/LumenateSessionService` (strobe→BLE bridge),
-  `common/G1` (Nova manager + UUID table), `common/D0` (per-device GATT, encoders `w0/s0/v0`),
-  `strobe/StrobeManager` (native waveform), `defpackage/{c,h}` (enums).
+  `common/G1` (Nova manager + UUID table + motion detection), `common/D0` (per-device GATT,
+  encoders `w0`/`s0`/`v0`/`t0`), `strobe/StrobeManager` (native waveform),
+  `ib/{a,b,c}` (session DSL parser), `defpackage/{c,h}` (enums), `common/V1` (firmware update).

@@ -36,11 +36,14 @@ python3 nova/demo.py info          # model/fw/serial/battery
 python3 nova/demo.py welcome       # greeting LED animation
 python3 nova/demo.py strobe 10 0.3 # steady 10 Hz, 30% duty
 python3 nova/demo.py ramp          # 7->14 Hz sweep with breathing intensity
-python3 nova/demo.py monitor       # subscribe to buttons/sensor/battery
+python3 nova/demo.py monitor       # subscribe to buttons/motion sensor/battery
+python3 nova/demo.py session       # play a built-in light "score" (DSL)
 python3 tools/live_show.py         # scripted end-to-end demo
 ```
 
-The protocol lives in `docs/PROTOCOL.md`; the reusable control library is `nova/nova.py`.
+- `docs/PROTOCOL.md` — the full BLE protocol + session content DSL.
+- `docs/GENERATOR_DESIGN.md` — science-backed guide for building a light/sound session generator.
+- `nova/nova.py` — reusable control library (strobe, commands, motion sensor, DSL session player).
 
 ⚠️ **Photosensitivity:** this drives a bright stroboscope at 7–14 Hz — a flicker range that
 can trigger seizures in photosensitive people. Don't point it at someone's eyes during testing.

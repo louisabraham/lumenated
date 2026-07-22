@@ -21,7 +21,8 @@ ADV_NAME = "Lumenate Nova"
 
 SVC_STROBE = "b568de7c-b6c6-42cb-8303-fcc9cb25007c"
 CHR_STROBE = "f2c51a4e-2a46-4bef-b18f-cb00c716cfa6"  # write-without-response
-CHR_SENSOR = "12345678-9abc-4def-8012-3456789abcde"  # notify: 3x int16 LE
+CHR_SENSOR = "12345678-9abc-4def-8012-3456789abcde"  # notify: 3x int16 LE (accelerometer)
+CHR_STROBE_RATE = "abcdef01-2345-6789-abcd-ef0123456789"  # write: 1-byte motion sample rate
 
 SVC_COMMAND = "47bbfb1e-670e-4f81-bfb3-78daffc9a783"
 CHR_COMMAND = "3e25a3bf-bfe1-4c71-97c5-5bdb73fac89e"  # write: [cmdId, arg]
@@ -87,6 +88,77 @@ def decode_strobe_frame(data: bytes) -> str:
         return "OFF"
     period, on = ints[0], ints[1]
     return f"{1e6/period:.2f} Hz, duty {on/period*100:.1f}% (period {period}us on {on}us)"
+
+
+# --------------------------------------------------------------------------
+# Session "score" DSL  (see docs/PROTOCOL.md §10)
+#   track = ';'-separated segments;  segment = s(start,end,freqExpr,dutyExpr)
+#   expr  = c(x) constant | l(a,b) linear ramp | z zero
+# --------------------------------------------------------------------------
+@dataclass
+class Segment:
+    t0: float
+    t1: float
+    f0: float
+    f1: float
+    d0: float
+    d1: float
+
+
+def _split_args(s: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch == "(":
+            depth += 1; cur += ch
+        elif ch == ")":
+            depth -= 1; cur += ch
+        elif ch == "," and depth == 0:
+            out.append(cur); cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return [a.strip() for a in out]
+
+
+def _expr(e: str) -> tuple[float, float]:
+    e = e.strip()
+    if e == "z":
+        return (0.0, 0.0)
+    if e.startswith("c(") and e.endswith(")"):
+        x = float(e[2:-1]); return (x, x)
+    if e.startswith("l(") and e.endswith(")"):
+        a, b = _split_args(e[2:-1]); return (float(a), float(b))
+    return (float(e), float(e))
+
+
+def parse_session(dsl: str) -> list[Segment]:
+    """Parse one eye-track of the session DSL into segments."""
+    segs = []
+    for part in dsl.replace("\n", "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if not (part.startswith("s(") and part.endswith(")")):
+            raise ValueError(f"bad segment: {part!r}")
+        a = _split_args(part[2:-1])
+        f0, f1 = _expr(a[2])
+        d0, d1 = _expr(a[3])
+        segs.append(Segment(float(a[0]), float(a[1]), f0, f1, d0, d1))
+    return segs
+
+
+def sample_session(segs: list[Segment], t: float) -> tuple[float, float]:
+    """(frequency_hz, duty) at time t seconds; (0,0) outside all segments."""
+    for s in segs:
+        if s.t0 <= t < s.t1:
+            frac = (t - s.t0) / (s.t1 - s.t0) if s.t1 > s.t0 else 0.0
+            return (s.f0 + (s.f1 - s.f0) * frac, s.d0 + (s.d1 - s.d0) * frac)
+    return (0.0, 0.0)
+
+
+def session_duration(segs: list[Segment]) -> float:
+    return max((s.t1 for s in segs), default=0.0)
 
 
 @dataclass
@@ -196,6 +268,37 @@ class Nova:
             color = f[2] if len(f) > 2 else 0.0
             await self.set_strobe(freq, duty, color)
             await asyncio.sleep(dt)
+
+    async def play_session(self, dsl: str, rate_hz: float = 10.0, speed: float = 1.0,
+                           on_tick=None):
+        """Play a session-DSL light track (see parse_session). Blocks until done.
+
+        rate_hz: frame update rate (the app uses ~9-10 Hz)
+        speed:   time multiplier (2.0 = twice as fast)
+        on_tick: optional callback(t, freq, duty)
+        """
+        segs = parse_session(dsl)
+        dur = session_duration(segs)
+        dt = 1.0 / rate_hz
+        t = 0.0
+        try:
+            while t <= dur:
+                freq, duty = sample_session(segs, t)
+                await self.set_strobe(freq, duty)
+                if on_tick:
+                    on_tick(t, freq, duty)
+                await asyncio.sleep(dt / speed)
+                t += dt
+        finally:
+            await self.stop()
+
+    # ---- motion sensor ----
+    async def enable_motion(self, rate: int = 10):
+        """Enable the accelerometer stream: set sample rate + subscribe (see subscribe_sensor)."""
+        await self.client.write_gatt_char(CHR_STROBE_RATE, bytes([rate & 0xFF]), response=False)
+
+    async def disable_motion(self):
+        await self.client.write_gatt_char(CHR_STROBE_RATE, bytes([0]), response=False)
 
     # ---- commands ----
     async def welcome_leds(self, arg: int = 0):
