@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import shutil
+import signal
 import struct
 import subprocess
+import time
 import wave
 from dataclasses import dataclass
 
@@ -150,28 +153,101 @@ def to_dsl(segments) -> str:
 # ==========================================================================
 # Playback: light-only / with external audio
 # ==========================================================================
+class PlayControl:
+    """Pause/resume/stop handle shared with a running session.
+
+    Pausing freezes the light clock, blanks the LEDs, and SIGSTOPs the audio process
+    (afplay/ffplay) so audio and light stay in sync on resume. Stopping ends the session.
+    """
+
+    def __init__(self):
+        self.running = asyncio.Event()
+        self.running.set()
+        self.stopped = asyncio.Event()
+        self._proc = None
+        self._paused_total = 0.0
+        self._paused_at = None
+
+    def bind_audio(self, proc):
+        self._proc = proc
+
+    def _now(self):
+        return time.monotonic()
+
+    def _signal(self, sig):
+        p = self._proc
+        if p is not None and p.poll() is None:
+            try:
+                os.kill(p.pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    @property
+    def paused(self):
+        return not self.running.is_set() and not self.stopped.is_set()
+
+    def pause(self):
+        if not self.running.is_set() or self.stopped.is_set():
+            return
+        self._paused_at = self._now()
+        self.running.clear()
+        self._signal(signal.SIGSTOP)
+
+    def resume(self):
+        if self.running.is_set():
+            return
+        if self._paused_at is not None:
+            self._paused_total += self._now() - self._paused_at
+            self._paused_at = None
+        self.running.set()
+        self._signal(signal.SIGCONT)
+
+    def toggle(self):
+        self.pause() if self.running.is_set() else self.resume()
+
+    def stop(self):
+        self.stopped.set()
+        self.running.set()          # unblock any pause wait
+        self._signal(signal.SIGCONT)  # never leave audio suspended
+
+    def elapsed(self, start):
+        now = self._now()
+        e = now - start - self._paused_total
+        if self._paused_at is not None:
+            e -= now - self._paused_at
+        return e
+
+
 async def play_segments(nova: Nova, segments, rate_hz=DEFAULT_RATE_HZ,
-                        start_clock=None, duration=None, on_tick=None):
+                        start_clock=None, duration=None, on_tick=None, control=None):
     """Stream a segment list to the Nova, time-synced to a wall clock.
 
     start_clock: loop.time() reference for t=0 (defaults to now). Passing the same
     value used to start audio keeps light and audio aligned.
+    control: optional PlayControl for pause/resume/stop.
     """
-    loop = asyncio.get_event_loop()
-    t0 = start_clock if start_clock is not None else loop.time()
+    t0 = start_clock if start_clock is not None else time.monotonic()
     dur = duration if duration is not None else session_duration(segments)
     dt = 1.0 / rate_hz
     try:
         while True:
-            t = loop.time() - t0
+            if control is not None:
+                if control.stopped.is_set():
+                    break
+                if control.paused:
+                    await nova.set_strobe(0, 0)         # LEDs off while paused
+                    await control.running.wait()
+                    continue
+                t = control.elapsed(t0)
+            else:
+                t = time.monotonic() - t0
             if t > dur:
                 break
             f, d = sample_session(segments, t)
             await nova.set_strobe(f, d)
             if on_tick:
                 on_tick(t, f, d, dur)
-            # keep the cadence steady regardless of write latency
-            await asyncio.sleep(max(0.0, (t0 + (int(t / dt) + 1) * dt) - loop.time()))
+            await asyncio.sleep(dt)
     finally:
         await nova.stop()
 
@@ -309,38 +385,50 @@ def start_audio(path: str):
 
 
 async def play_with_audio(nova: Nova, segments, audio_path: str,
-                          rate_hz=DEFAULT_RATE_HZ, on_tick=None):
+                          rate_hz=DEFAULT_RATE_HZ, on_tick=None, control=None):
     """Mode A/B: play audio while streaming a light score, aligned at t=0."""
-    loop = asyncio.get_event_loop()
     proc = start_audio(audio_path)
-    start = loop.time()
+    if control is not None:
+        control.bind_audio(proc)
+    start = time.monotonic()
     try:
         await play_segments(nova, segments, rate_hz=rate_hz, start_clock=start,
-                            on_tick=on_tick)
+                            on_tick=on_tick, control=control)
     finally:
         if proc.poll() is None:
             proc.terminate()
 
 
 async def play_reactive(nova: Nova, audio_path: str, base_lo=8.0, base_hi=12.0,
-                        duty_lo=0.05, duty_hi=0.55, rate_hz=DEFAULT_RATE_HZ, on_tick=None):
+                        duty_lo=0.05, duty_hi=0.55, rate_hz=DEFAULT_RATE_HZ, on_tick=None,
+                        control=None):
     """Mode C: analyse the track, then modulate the strobe from it while it plays."""
     a = analyze(audio_path, rate_hz=rate_hz)
     freq, duty = reactive_tracks(a, base_lo, base_hi, duty_lo, duty_hi)
-    loop = asyncio.get_event_loop()
     proc = start_audio(audio_path)
-    start = loop.time()
+    if control is not None:
+        control.bind_audio(proc)
+    start = time.monotonic()
     dt = 1.0 / rate_hz
     try:
         while True:
-            elapsed = loop.time() - start
+            if control is not None:
+                if control.stopped.is_set():
+                    break
+                if control.paused:
+                    await nova.set_strobe(0, 0)
+                    await control.running.wait()
+                    continue
+                elapsed = control.elapsed(start)
+            else:
+                elapsed = time.monotonic() - start
             i = int(elapsed * rate_hz)
             if i >= freq.size:
                 break
             await nova.set_strobe(float(freq[i]), float(duty[i]))
             if on_tick:
                 on_tick(elapsed, float(freq[i]), float(duty[i]), a.duration)
-            await asyncio.sleep(max(0.0, (start + (i + 1) * dt) - loop.time()))
+            await asyncio.sleep(dt)
     finally:
         await nova.stop()
         if proc.poll() is None:

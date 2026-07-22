@@ -6,7 +6,8 @@ A short sequential prompt — one decision at a time:
   2. Preset
   3. Length
   4. Connect the Nova (last step; with pairing instructions + retry)
-  5. Press the Nova's power button to start — and again to stop — as in the app.
+  5. Press the Nova's power button to start; power or space to pause/resume;
+     q / esc / Ctrl-C to quit — as in the app.
 
 No full-screen UI, no mouse.
 
@@ -217,35 +218,78 @@ async def _keepalive(nova):
         pass
 
 
-async def _play(mode, preset, minutes, path, nova, tick):
+async def _play(mode, preset, minutes, path, nova, tick, control):
     segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()
     if mode == "light":
-        await gen.play_segments(nova, segs, on_tick=tick)
+        await gen.play_segments(nova, segs, on_tick=tick, control=control)
     elif mode == "music":
-        await gen.play_with_audio(nova, segs, path, on_tick=tick)
+        await gen.play_with_audio(nova, segs, path, on_tick=tick, control=control)
     elif mode == "isochronic":
         from . import music
         wav = os.path.join(music.DEFAULT_MUSIC_DIR, f"_iso_{preset}.wav")
         os.makedirs(music.DEFAULT_MUSIC_DIR, exist_ok=True)
         gen.synth_isochronic(segs, wav)
-        await gen.play_with_audio(nova, segs, wav, on_tick=tick)
+        await gen.play_with_audio(nova, segs, wav, on_tick=tick, control=control)
     else:  # reactive
-        await gen.play_reactive(nova, path, on_tick=tick)
+        await gen.play_reactive(nova, path, on_tick=tick, control=control)
+
+
+def _key_listener(loop, on_space, on_quit, stop_flag):
+    """Daemon thread: read single keys in raw mode; space→pause, q/esc/Ctrl-C→quit."""
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except Exception:
+        return
+    try:
+        tty.setraw(fd)
+        while not stop_flag.is_set():
+            if not select.select([fd], [], [], 0.1)[0]:
+                continue
+            ch = os.read(fd, 1).decode(errors="ignore")
+            if ch == " ":
+                loop.call_soon_threadsafe(on_space)
+            elif ch == "\x1b":  # esc — but distinguish from arrow escape sequences
+                if select.select([fd], [], [], 0.02)[0]:
+                    os.read(fd, 2)  # swallow an arrow/other sequence
+                else:
+                    loop.call_soon_threadsafe(on_quit)
+            elif ch in ("q", "\x03"):
+                loop.call_soon_threadsafe(on_quit)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 async def connect_and_run(mode, preset, minutes, path):
+    import threading
     nova = await connect_with_retry()
     if nova is None:
         print(dim("  cancelled."))
         return
 
-    # ONE subscription drives both start and stop: first POWER press starts, next stops.
-    start_evt, stop_evt = asyncio.Event(), asyncio.Event()
+    control = gen.PlayControl()
+    start_evt = asyncio.Event()
     started = {"v": False}
 
-    def on_remote(ev):
-        if ev == "POWER":
-            (stop_evt if started["v"] else start_evt).set()
+    def announce():
+        if control.paused:
+            sys.stdout.write("\r\x1b[2K  " + dim("⏸ paused — space/power resume · q/esc quit"))
+            sys.stdout.flush()
+
+    def toggle():
+        control.toggle()
+        announce()
+
+    def on_remote(ev):           # one subscription: first POWER starts, then pauses/resumes
+        if ev != "POWER":
+            return
+        if not started["v"]:
+            start_evt.set()
+        else:
+            toggle()
 
     try:
         try:
@@ -272,24 +316,34 @@ async def connect_and_run(mode, preset, minutes, path):
             ka.cancel()
             await asyncio.gather(ka, return_exceptions=True)
         started["v"] = True
-        print(dim("  running — press the power button again (or Ctrl-C) to stop.\n"))
+        print(dim("  running — power / space pause · q / esc / Ctrl-C quit\n"))
+
+        loop = asyncio.get_event_loop()
+        stop_flag = threading.Event()
+        listener = None
+        if _interactive():
+            listener = threading.Thread(
+                target=_key_listener,
+                args=(loop, toggle, control.stop, stop_flag), daemon=True)
+            listener.start()
 
         def tick(t, f, d, dur):
+            if control.paused:
+                return
             sys.stdout.write(
-                f"\r  {ok('●')} {f:5.2f} Hz   duty {d * 100:4.1f}%   "
-                f"{dim(f't {t:5.1f}/{dur:.0f}s')}   ")
+                f"\r\x1b[2K  {ok('●')} {f:5.2f} Hz   duty {d * 100:4.1f}%   "
+                f"{dim(f't {t:5.1f}/{dur:.0f}s')}")
             sys.stdout.flush()
 
-        play = asyncio.create_task(_play(mode, preset, minutes, path, nova, tick))
-        stopper = asyncio.create_task(stop_evt.wait())
-        await asyncio.wait({play, stopper}, return_when=asyncio.FIRST_COMPLETED)
-        if not play.done():
-            play.cancel()
-        if not stopper.done():
-            stopper.cancel()
-        await asyncio.gather(play, stopper, return_exceptions=True)
-        print("\n  " + (dim("stopped.") if stop_evt.is_set() else ok("done ✅")))
+        try:
+            await _play(mode, preset, minutes, path, nova, tick, control)
+        finally:
+            stop_flag.set()
+            if listener is not None:
+                listener.join(timeout=0.5)
+        print("\n  " + (dim("stopped.") if control.stopped.is_set() else ok("done ✅")))
     except (KeyboardInterrupt, asyncio.CancelledError):
+        control.stop()
         print("\n  " + dim("stopped."))
     finally:
         try:
