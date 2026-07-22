@@ -201,12 +201,12 @@ class Nova:
     async def welcome_leds(self, arg: int = 0):
         """Trigger the greeting/identify LED animation."""
         await self.client.write_gatt_char(
-            CHR_COMMAND, bytes([CMD_WELCOME_LEDS, arg & 0xFF]), response=True
+            CHR_COMMAND, bytes([CMD_WELCOME_LEDS, arg & 0xFF]), response=False
         )
 
     async def start_offline_session(self, mode: int = OFFLINE_RELAXED):
         """Start a stored on-device session (RELAXED/EXPLORE/SLEEP)."""
-        await self.client.write_gatt_char(CHR_OFFLINE_MODE, bytes([mode & 0xFF]), response=True)
+        await self.client.write_gatt_char(CHR_OFFLINE_MODE, bytes([mode & 0xFF]), response=False)
 
     async def read_offline_header(self):
         data = await self.client.read_gatt_char(CHR_OFFLINE_HEADER)

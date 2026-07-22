@@ -26,6 +26,25 @@ Scope: interoperability with a device I own, for personal use.
    pull `btsnoop_hci.log`, read GATT writes/notifications in Wireshark/tshark.
 3. **Confirm**: connect from the Mac with bleak, replay/adapt commands, build the demo.
 
+## Quickstart (control from the Mac)
+
+```bash
+pip install bleak
+# In the Lumenate app: Nova settings -> "Forget this Nova" (releases the phone bond).
+python3 nova/demo.py scan          # find the Nova
+python3 nova/demo.py info          # model/fw/serial/battery
+python3 nova/demo.py welcome       # greeting LED animation
+python3 nova/demo.py strobe 10 0.3 # steady 10 Hz, 30% duty
+python3 nova/demo.py ramp          # 7->14 Hz sweep with breathing intensity
+python3 nova/demo.py monitor       # subscribe to buttons/sensor/battery
+python3 tools/live_show.py         # scripted end-to-end demo
+```
+
+The protocol lives in `docs/PROTOCOL.md`; the reusable control library is `nova/nova.py`.
+
+⚠️ **Photosensitivity:** this drives a bright stroboscope at 7–14 Hz — a flicker range that
+can trigger seizures in photosensitive people. Don't point it at someone's eyes during testing.
+
 ## Status
 
-See `docs/PROGRESS.md`.
+✅ Protocol reverse-engineered and Mac control verified on hardware. See `docs/PROGRESS.md`.

@@ -1,6 +1,11 @@
 # Progress log
 
-## Status: protocol RE complete (static + dynamic). Live Mac-control test pending.
+## Status: ✅ COMPLETE — protocol RE'd and Mac control verified live on hardware.
+
+Live test result: connected from the Mac to the Nova (nRF52833, fw 1.0.4, battery 76%),
+read device info, triggered Welcome LEDs, and drove a full strobe sequence (steady 10 Hz,
+7→14 Hz sweep with breathing intensity, discrete strobes, blank/stop) — all working.
+No bonding/encryption barrier once the phone "forgot" the device.
 
 ## What we did
 
@@ -23,14 +28,17 @@
 - **Buttons** notify `[0x01,event]` on `964fbffe-…`: 0/1/2 = power/bright+/bright-.
 - **Sensor** notify 3×int16 LE on `12345678-…`. Battery 0x2A19; device info 0x2A24-27.
 
-## Next: live control from the Mac
+## How to control from the Mac (verified path)
 
-Needs the physical Nova **connectable from the Mac**. Because it bonds to one central and
-is currently bonded to the phone:
-1. Ensure it's not connected to the phone app (LED flashing white). Try `python3 nova/demo.py scan`.
-2. If it won't connect/pair (still bonded to phone), **factory-reset** the Nova (LED
-   alternates blue/white), then retry — CoreBluetooth will Just-Works pair.
-3. Validate: `info` → `welcome` → `strobe 10 0.3` → `ramp` → `monitor`.
+1. In the Lumenate app, tap **"Forget this Nova"** (Nova settings) so the phone releases it.
+   The Nova starts advertising in search mode (LED flashing white).
+2. Run the demo (press the Nova power button if it stops advertising before connect):
+   - `python3 nova/demo.py scan`
+   - `python3 nova/demo.py info`
+   - `python3 nova/demo.py welcome`
+   - `python3 nova/demo.py ramp`     (or `strobe 10 0.3`, `monitor`)
+   - one-shot show: `python3 tools/live_show.py`
+3. To use the Nova with the phone again, just re-pair it in the app.
 
 ## Open questions
 

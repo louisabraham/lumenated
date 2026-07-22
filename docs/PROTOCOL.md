@@ -5,8 +5,9 @@ session HCI snoop capture. Confirmed values are marked ✅; inferences are marke
 
 ## 1. Hardware & overview
 
-- Wearable stroboscopic **light mask, 4 LEDs**, nRF52-class BLE SoC (Nordic
-  `no.nordicsemi.android.ble` client stack + Nordic-style DFU + blue/white status LED).
+- Wearable stroboscopic **light mask, 4 LEDs**. SoC = **Nordic nRF52833** (read live from
+  the Model Number char) ✅; Nordic `no.nordicsemi.android.ble` client stack + Nordic-style
+  DFU + blue/white status LED. Test unit: firmware `1.0.4`, hardware `1.0`.
 - Advertises as local name **`Lumenate Nova`** ✅. The app scans with a `ScanFilter`
   on a service UUID ⓘ; filtering by name works too.
 - **The flicker waveform is generated on the phone**, not the device. A native library
@@ -23,46 +24,55 @@ session HCI snoop capture. Confirmed values are marked ✅; inferences are marke
   pairing + bonding** at connect time ✅ (14 SMP PDUs observed). Pairing looked like
   Just-Works (no passkey UI on the mask) ⓘ.
 - The device **bonds to one central at a time** (status LED: flashing white = looking for its
-  last device, solid blue = connected). To control it from a *different* host you will likely
-  need to **factory-reset** the Nova (hold until the LED alternates blue/white) to clear the
-  old bond, then pair fresh. Whether the custom characteristics strictly *require* encryption
-  vs. merely request bonding is not provable from the capture (all GATT traffic was post-pair);
-  treat "bond first" as the safe assumption ⓘ. macOS/CoreBluetooth performs Just-Works pairing
-  automatically on first encrypted access.
+  last device, solid blue = connected). It will not accept a new host while it is still bound to
+  the phone.
+- **Confirmed live:** after tapping **"Forget this Nova"** in the app (which drops the
+  phone-side association), the Nova accepts a fresh connection from the Mac and **all custom
+  characteristics are readable/writable with no bonding/encryption barrier** ✅ — GATT reads and
+  strobe writes succeed immediately. So the custom services do *not* require encryption; the
+  bonding was only for the device's auto-reconnect to its remembered phone. (After this, you'll
+  need to re-pair the Nova with your phone in the app to use it there again.)
 
-## 3. GATT table
+## 3. GATT table (verified live from the device ✅)
 
-Custom services (128-bit UUIDs) plus standard Battery/Device-Information. Handles are from the
-captured device and may differ across firmware; **address by UUID**.
+Full table read from the connected Nova. **Address by UUID** (handles vary by firmware).
+`WWR` = Write-Without-Response.
 
-### Command service — `47bbfb1e-670e-4f81-bfb3-78daffc9a783` ✅
-| Char UUID | Handle | Props | Role |
-|---|---|---|---|
-| `964fbffe-6940-4371-8d48-fe43b07ed00b` | 0x001a | Notify | **Remote/button events** — `[0x01, event]` |
-| `3e25a3bf-bfe1-4c71-97c5-5bdb73fac89e` | 0x001d | Write | **Command** — e.g. Welcome-LEDs |
-| (2 more chars @0x001e–0x001f) | | | unmapped ⓘ (possibly OTA/reserved) |
+### Command service — `47bbfb1e-670e-4f81-bfb3-78daffc9a783`
+| Char UUID | Props | Role |
+|---|---|---|
+| `964fbffe-6940-4371-8d48-fe43b07ed00b` | notify, read | **Remote/button events** — `[0x01, event]` |
+| `3e25a3bf-bfe1-4c71-97c5-5bdb73fac89e` | WWR | **Command** — e.g. Welcome-LEDs |
+| `2b35ef1f-11a6-4089-8cd5-843c5d0c9c55` | notify, WWR, read | extra command channel ⓘ (unmapped) |
 
-### Offline-session service — `3e8ec328-a4b8-4273-a380-47d219f64e9b` ✅
-| Char UUID | Handle | Props | Role |
-|---|---|---|---|
-| `2a84aaff-6738-4629-894c-346357b89a0c` | 0x002e | Read/Write/Notify | **Offline session mode** — 1 byte |
-| `51bfc219-feab-4227-8b93-8af8cc5306d4` | 0x0031 | Read/Notify | **Offline session header** — 16 bytes |
+### Offline-session service — `3e8ec328-a4b8-4273-a380-47d219f64e9b`
+| Char UUID | Props | Role |
+|---|---|---|
+| `2a84aaff-6738-4629-894c-346357b89a0c` | notify, WWR, read | **Offline session mode** — 1 byte |
+| `51bfc219-feab-4227-8b93-8af8cc5306d4` | read | **Offline session header** — 16 bytes |
 
-### Strobe service — `b568de7c-b6c6-42cb-8303-fcc9cb25007c` ✅
-| Char UUID | Handle | Props | Role |
-|---|---|---|---|
-| `f2c51a4e-2a46-4bef-b18f-cb00c716cfa6` | 0x0034 | **Write-Without-Response** | **Strobe frames** (the core) |
-| `12345678-9abc-4def-8012-3456789abcde` | 0x0036 | Notify | **Sensor stream** — 3×int16 LE |
-| (config char @0x0038–0x0039) | 0x0039 | Write | **Stream-rate** — 1 byte (observed `0x0a`=10) ⓘ |
+### Strobe service — `b568de7c-b6c6-42cb-8303-fcc9cb25007c`
+| Char UUID | Props | Role |
+|---|---|---|
+| `f2c51a4e-2a46-4bef-b18f-cb00c716cfa6` | WWR | **Strobe frames** (the core) |
+| `12345678-9abc-4def-8012-3456789abcde` | notify, read | **Sensor stream** — 3×int16 LE |
+| `abcdef01-2345-6789-abcd-ef0123456789` | WWR | extra strobe/write channel ⓘ (unmapped) |
+
+### Firmware-update / debug service — `8d53dc1d-1db7-4cd3-868b-8a527460aa84` ⓘ
+| Char UUID | Props | Role |
+|---|---|---|
+| `da2e7828-fbce-4e01-ae9e-261174997c48` | notify, WWR | likely OTA/DFU or diagnostics (not analysed) |
 
 ### Standard
-| Service | Char | Handle | Role |
-|---|---|---|---|
-| Battery `0x180F` | `0x2A19` | 0x0012 | Battery level % (read/notify) ✅ |
-| Device Info `0x180A` | `0x2A24` | 0x0023 | Model number (string) ✅ |
-| | `0x2A25` | 0x0027 | Serial number → used as the device id ✅ |
-| | `0x2A26` | 0x0029 | Firmware revision ✅ |
-| | `0x2A27` | 0x002b | Hardware revision ✅ |
+| Service | Char | Role |
+|---|---|---|
+| Battery `0x180F` | `0x2A19` | Battery level % (read/notify) ✅ |
+| | `0x2BED` | (extra, read/notify/indicate) ⓘ |
+| Device Info `0x180A` | `0x2A24` | Model number → `nrf52833` ✅ |
+| | `0x2A29` | Manufacturer name |
+| | `0x2A25` | Serial number → used as the device id ✅ |
+| | `0x2A26` | Firmware revision → `1.0.4` ✅ |
+| | `0x2A27` | Hardware revision → `1.0` ✅ |
 
 ## 4. Strobe frames (the core protocol) ✅
 
