@@ -62,20 +62,86 @@ def _read(prompt: str) -> str:
         raise Abort()
 
 
+def _interactive() -> bool:
+    return _COLOR and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _getkey() -> str:
+    """Read one keypress: 'up'/'down'/'esc', or the literal character."""
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = os.read(fd, 1).decode(errors="ignore")
+        if ch == "\x1b":  # escape sequence (arrows) or a lone Esc
+            if select.select([fd], [], [], 0.05)[0]:
+                rest = os.read(fd, 2).decode(errors="ignore")
+                return {"[A": "up", "[B": "down"}.get(rest, "esc")
+            return "esc"
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def choose(title: str, options, default: int = 0) -> int:
-    """Numbered single-choice. options = [(name, description)]. Returns the index."""
-    print(f"\n{bold(title)}")
-    for i, (name, desc) in enumerate(options):
-        marker = accent("›") if i == default else " "
-        num = accent(f"{i + 1}")
-        print(f"  {marker} {num}  {name:<11} {dim(desc)}")
-    while True:
-        raw = _read(f"  choose {dim(f'[{default + 1}]')} ")
-        if not raw:
-            return default
-        if raw.isdigit() and 1 <= int(raw) <= len(options):
-            return int(raw) - 1
-        print(dim("  enter a number from the list"))
+    """Single-choice menu. options = [(name, description)]. Returns the index.
+
+    Interactive (TTY): arrow keys / j / k to move, Enter to select, 1-9 to jump, q/Esc
+    to cancel. Non-TTY: falls back to a plain numbered prompt.
+    """
+    width = max((len(n) for n, _ in options), default=0)
+
+    if not _interactive():
+        print(f"\n{bold(title)}")
+        for i, (name, desc) in enumerate(options):
+            print(f"    {i + 1}  {name.ljust(width)}  {dim(desc)}")
+        while True:
+            raw = _read(f"  choose {dim(f'[{default + 1}]')} ")
+            if not raw:
+                return default
+            if raw.isdigit() and 1 <= int(raw) <= len(options):
+                return int(raw) - 1
+            print(dim("  enter a number from the list"))
+
+    print(f"\n{bold(title)}   "
+          f"{dim(f'↑↓ move · enter select · 1-{min(9, len(options))} jump · q cancel')}")
+    sel = default
+
+    def render(first: bool):
+        if not first:
+            sys.stdout.write(f"\x1b[{len(options)}A")  # cursor up N rows
+        for i, (name, desc) in enumerate(options):
+            cur = i == sel
+            mark = accent(">") if cur else " "
+            num = accent(str(i + 1)) if cur else dim(str(i + 1))
+            label = bold(name) if cur else name
+            pad = " " * (width - len(name))
+            sys.stdout.write(f"\r\x1b[2K  {mark} {num}  {label}{pad}  {dim(desc)}\n")
+        sys.stdout.flush()
+
+    sys.stdout.write("\x1b[?25l")  # hide cursor
+    try:
+        render(True)
+        while True:
+            k = _getkey()
+            if k in ("up", "k"):
+                sel = (sel - 1) % len(options); render(False)
+            elif k in ("down", "j"):
+                sel = (sel + 1) % len(options); render(False)
+            elif k in ("\r", "\n"):
+                return sel
+            elif k.isdigit() and 1 <= int(k) <= len(options):
+                return int(k) - 1
+            elif k == "\x03":  # Ctrl-C
+                raise KeyboardInterrupt
+            elif k in ("q", "esc"):
+                raise Abort()
+    finally:
+        sys.stdout.write("\x1b[?25h")  # show cursor
+        sys.stdout.flush()
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -141,31 +207,14 @@ async def connect_with_retry():
                 return None
 
 
-async def wait_to_start(nova) -> bool:
-    """Wait for a Nova power-button press (or Enter). Returns False if aborted."""
-    start = asyncio.Event()
-
-    def on_remote(ev):
-        if ev == "POWER":
-            start.set()
-
+async def _keepalive(nova):
+    """Blank frames every 2 s so the Nova doesn't drop an idle link before we start."""
     try:
-        await nova.subscribe_remote(on_remote)
-    except Exception:
-        pass  # fall back to Enter-only
-    print("\n  " + ok("connected.") + dim("  press the Nova's power button to start"
-                                          " (or Enter here) — Ctrl-C to cancel."))
-    enter = asyncio.create_task(asyncio.to_thread(sys.stdin.readline))
-    power = asyncio.create_task(start.wait())
-    try:
-        await asyncio.wait({enter, power}, return_when=asyncio.FIRST_COMPLETED)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        return False
-    finally:
-        for t in (enter, power):
-            if not t.done():
-                t.cancel()
-    return True
+        while True:
+            await nova.set_strobe(0, 0)   # all-zero = LEDs off
+            await asyncio.sleep(2.0)
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 async def _play(mode, preset, minutes, path, nova, tick):
@@ -189,17 +238,41 @@ async def connect_and_run(mode, preset, minutes, path):
     if nova is None:
         print(dim("  cancelled."))
         return
-    try:
-        info = await nova.read_info()
-        print(f"  {info.model}  fw {info.firmware}  battery {info.battery}%")
-        if not await wait_to_start(nova):
-            print("\n  " + dim("cancelled."))
-            return
-        print(dim("  running — press the power button again (or Ctrl-C) to stop.\n"))
 
-        # a second power press stops the session
-        stop = asyncio.Event()
-        await nova.subscribe_remote(lambda ev: stop.set() if ev == "POWER" else None)
+    # ONE subscription drives both start and stop: first POWER press starts, next stops.
+    start_evt, stop_evt = asyncio.Event(), asyncio.Event()
+    started = {"v": False}
+
+    def on_remote(ev):
+        if ev == "POWER":
+            (stop_evt if started["v"] else start_evt).set()
+
+    try:
+        try:
+            info = await nova.read_info()
+            print(f"  {ok('connected')}  {info.model}  fw {info.firmware}  battery {info.battery}%")
+        except Exception:
+            print("  " + ok("connected"))
+
+        button = True
+        try:
+            await nova.subscribe_remote(on_remote)
+        except Exception:
+            button = False
+
+        ka = asyncio.create_task(_keepalive(nova))  # hold the link while we wait
+        try:
+            if button:
+                print("\n  press the Nova's " + accent("power button")
+                      + " to start" + dim("   (Ctrl-C to cancel)"))
+                await start_evt.wait()
+            else:
+                await asyncio.to_thread(input, "\n  press Enter to start… ")
+        finally:
+            ka.cancel()
+            await asyncio.gather(ka, return_exceptions=True)
+        started["v"] = True
+        print(dim("  running — press the power button again (or Ctrl-C) to stop.\n"))
 
         def tick(t, f, d, dur):
             sys.stdout.write(
@@ -208,13 +281,14 @@ async def connect_and_run(mode, preset, minutes, path):
             sys.stdout.flush()
 
         play = asyncio.create_task(_play(mode, preset, minutes, path, nova, tick))
-        stopper = asyncio.create_task(stop.wait())
+        stopper = asyncio.create_task(stop_evt.wait())
         await asyncio.wait({play, stopper}, return_when=asyncio.FIRST_COMPLETED)
         if not play.done():
             play.cancel()
-        stopper.cancel()
-        await asyncio.gather(play, return_exceptions=True)
-        print("\n  " + (dim("stopped.") if stop.is_set() else ok("done ✅")))
+        if not stopper.done():
+            stopper.cancel()
+        await asyncio.gather(play, stopper, return_exceptions=True)
+        print("\n  " + (dim("stopped.") if stop_evt.is_set() else ok("done ✅")))
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n  " + dim("stopped."))
     finally:
@@ -233,13 +307,20 @@ def main():
         if mode in ("reactive", "music"):
             track = pick_track()
 
-        preset = list(gen.PRESETS)[
-            choose("Preset", [(p, PRESET_DESC[p]) for p in gen.PRESETS])]
+        # Preset & length only matter for the generated light arc (light/music/isochronic).
+        # In reactive mode the music's envelope drives the light, so we skip both.
+        if mode == "reactive":
+            preset, minutes = "relax", None  # unused by reactive
+        else:
+            preset = list(gen.PRESETS)[
+                choose("Preset", [(p, PRESET_DESC[p]) for p in gen.PRESETS])]
+            mr = ask("\n" + bold("Length") + " in minutes"
+                     + dim(" (blank = match track / preset)"))
+            minutes = float(mr) if mr else None
 
-        mr = ask("\n" + bold("Length") + " in minutes" + dim(" (blank = match track / preset)"))
-        minutes = float(mr) if mr else None
-
-        bits = [accent(mode), accent(preset), f"{minutes:g} min" if minutes else "auto"]
+        bits = [accent(mode)]
+        if mode != "reactive":
+            bits += [accent(preset), f"{minutes:g} min" if minutes else "auto"]
         if track:
             bits.append(f"“{track.title}”")
         print("\n  " + dim("→ ") + "  ·  ".join(bits))
