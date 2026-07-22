@@ -153,6 +153,17 @@ def ask(prompt: str, default: str | None = None) -> str:
     return val or (default or "")
 
 
+def _dur_to_minutes(s):
+    """Parse a 'M:SS' / 'H:MM:SS' duration string into minutes (float), or None."""
+    try:
+        sec = 0
+        for part in str(s).split(":"):
+            sec = sec * 60 + int(part)
+        return sec / 60.0 or None
+    except (ValueError, AttributeError):
+        return None
+
+
 # --------------------------------------------------------------------------
 # Music selection (only for modes that use audio)
 # --------------------------------------------------------------------------
@@ -372,12 +383,12 @@ def step_music():
     """Choose the sound source. Returns {"source", "track"} (never BACK — first step)."""
     while True:
         idx = choose("Sound", [
-            ("search", "find a track on YouTube Music"),
             ("suggested", "pick from a curated ambient / meditative list"),
+            ("search", "find a track on YouTube Music"),
             ("generated", "synthesised isochronic tones (phase-locked) — no download"),
             ("none", "no sound — light only"),
         ], allow_back=False)
-        kind = ["search", "suggested", "generated", "none"][idx]
+        kind = ["suggested", "search", "generated", "none"][idx]
         if kind == "generated":
             return {"source": "generated", "track": None}
         if kind == "none":
@@ -391,16 +402,21 @@ def step_music():
 def step_light():
     """When there's a track: reactive vs generated. Returns True (reactive)/False, or BACK."""
     idx = choose("Light", [
-        ("reactive", "the light tracks the music's loudness live (rhythmic flicker)"),
         ("generated", "a designed light 'journey' plays alongside the music"),
+        ("reactive", "the light tracks the music's loudness live (rhythmic flicker)"),
     ])
-    return BACK if idx is BACK else (idx == 0)
+    return BACK if idx is BACK else (idx == 1)   # reactive is the 2nd option
+
+
+def _journey_order():
+    return ["explore"] + [p for p in gen.PRESETS if p != "explore"]
 
 
 def step_preset():
     """Pick the generated-light journey. Returns a preset name, or BACK."""
-    idx = choose("Light journey", [(p, PRESET_DESC[p]) for p in gen.PRESETS])
-    return BACK if idx is BACK else list(gen.PRESETS)[idx]
+    order = _journey_order()
+    idx = choose("Light journey", [(p, PRESET_DESC[p]) for p in order])
+    return BACK if idx is BACK else order[idx]
 
 
 def main():
