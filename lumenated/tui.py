@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Terminal UI for the Lumenate Nova light/sound generator.
+"""Keyboard-driven terminal UI for the Lumenate Nova light/sound generator.
 
-Search YouTube Music (ytmusicapi), download audio (yt-dlp), then run a session that
-drives the Nova's strobe in one of four modes while the audio plays:
+A single list you navigate with the arrow keys (or j/k). Search YouTube Music,
+pick a track, and it downloads + runs a session on the Nova. No mouse needed.
 
-  light      — generated light preset only (no audio)
-  music      — generated light preset alongside the downloaded track
-  reactive   — light duty follows the track's loudness envelope (flash stays rhythmic)
-  isochronic — synthesised isochronic tones phase-locked to the light (no download)
+Keys:  / search   ↑↓/jk move   enter select/run   m mode   p preset   d duration
+       s stop   r recommended   q quit
 
-Run:  python3 nova/tui.py        (needs bleak, textual, ytmusicapi, yt-dlp, ffmpeg)
+Run:  lumenated-tui         (needs the [tui] extra: textual, ytmusicapi, yt-dlp, ffmpeg)
 
 ⚠️ Photosensitive-seizure risk: this is a 7–18 Hz stroboscope. See the README.
 """
@@ -20,210 +18,248 @@ import os
 
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
-                             ListItem, ListView, Log, ProgressBar, Select, Static)
+from textual.widgets import Footer, Header, Input, Log, OptionList, Static
+from textual.widgets.option_list import Option
 
 from . import generator as gen
 from . import music
 from .core import Nova
 
-MODES = [("light — preset only", "light"),
-         ("music — preset + your track", "music"),
-         ("reactive — light follows the music", "reactive"),
-         ("isochronic — generated tones + light", "isochronic")]
-PRESETS = [(p, p) for p in gen.PRESETS]
+MODES = ["reactive", "music", "light", "isochronic"]
+MODE_HELP = {
+    "reactive": "light follows the music envelope",
+    "music": "generated light preset + your track",
+    "light": "generated light preset only (no audio)",
+    "isochronic": "generated tones phase-locked to light (no download)",
+}
+PRESETS = list(gen.PRESETS)
+DURATIONS = [None, 5, 10, 20]  # None = auto (match track / preset default)
 
 
-def _dur_to_minutes(s: str) -> float | None:
+def _dur_to_minutes(s: str):
     try:
-        parts = [int(p) for p in s.split(":")]
-    except ValueError:
+        sec = 0
+        for p in s.split(":"):
+            sec = sec * 60 + int(p)
+        return sec / 60.0 or None
+    except (ValueError, AttributeError):
         return None
-    sec = 0
-    for p in parts:
-        sec = sec * 60 + p
-    return sec / 60.0 if sec else None
 
 
 class NovaTUI(App):
     CSS = """
-    #left { width: 55%; }
-    #right { width: 45%; padding: 0 1; }
-    #results { height: 1fr; }
-    #recommended { height: 10; border: round $accent; }
-    #log { height: 1fr; border: round $accent; }
-    #selected { color: $accent; height: 3; }
-    Select, Input, Button { margin: 0 0 1 0; }
+    Screen { background: $surface; }
+    #status { padding: 0 1; height: 1; color: $accent; }
+    #hint   { padding: 0 1; height: 1; color: $text-muted; }
+    #search { margin: 0 1; display: none; }
+    #search.on { display: block; }
+    #list { height: 1fr; padding: 0 1; }
+    #log { height: 6; margin: 0 1; padding: 0 1; background: $panel; color: $text-muted; }
     """
-    BINDINGS = [("q", "quit", "Quit"), ("s", "stop", "Stop session")]
+    BINDINGS = [
+        ("slash", "search", "search"),
+        ("m", "mode", "mode"),
+        ("p", "preset", "preset"),
+        ("d", "duration", "duration"),
+        ("r", "recommended", "recommended"),
+        ("s", "stop", "stop"),
+        ("j", "down", ""),
+        ("k", "up", ""),
+        ("escape", "escape", ""),
+        ("q", "quit", "quit"),
+    ]
 
     def __init__(self):
         super().__init__()
-        self.rows: dict = {}          # DataTable row key -> Track
-        self.selected: music.Track | None = None
-        self.audio_path: str | None = None
+        self.view = "recommended"
+        self.tracks: list[music.Track] = []
+        self.mode = "reactive"
+        self.preset = "relax"
+        self.minutes = None
         self.session_running = False
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with Horizontal():
-            with Vertical(id="left"):
-                yield Input(placeholder="Search YouTube Music… (Enter)", id="query")
-                yield Label("Recommended (Enter to search):")
-                yield ListView(*[ListItem(Label(lbl), id=f"rec{i}")
-                                 for i, (lbl, _, _) in enumerate(music.RECOMMENDED)],
-                               id="recommended")
-                yield DataTable(id="results")
-            with Vertical(id="right"):
-                yield Static("No track selected", id="selected")
-                yield Select(MODES, value="reactive", id="mode", allow_blank=False)
-                yield Select(PRESETS, value="relax", id="preset", allow_blank=False)
-                yield Input(placeholder="minutes (blank = match track / preset default)",
-                            id="minutes")
-                with Horizontal():
-                    yield Button("Run session", variant="success", id="run")
-                    yield Button("Stop", variant="error", id="stop")
-                yield ProgressBar(total=100, show_eta=False, id="dl")
-                yield Log(id="log", highlight=False)
+        yield Header(show_clock=False)
+        yield Static(id="status")
+        yield Input(placeholder="type to search YouTube Music, Enter to run…", id="search")
+        yield OptionList(id="list")
+        yield Static(id="hint")
+        yield Log(id="log", highlight=False)
         yield Footer()
 
     def on_mount(self):
-        t = self.query_one("#results", DataTable)
-        t.add_columns("Title", "Artist", "Dur")
-        t.cursor_type = "row"
-        self._log("Search a track (or pick a recommendation), select a result, then Run.")
-        self._log("Modes: light / music / reactive / isochronic. Nova must be in pairing mode.")
+        self._refresh_status()
+        self.action_recommended()
+        self.query_one("#list", OptionList).focus()
+        self._log("Pick a recommendation (Enter) or press / to search. m=mode p=preset d=duration.")
 
-    # ---------- helpers ----------
+    # ---------- status / log ----------
+    def _refresh_status(self):
+        dur = "auto" if self.minutes is None else f"{self.minutes} min"
+        self.query_one("#status", Static).update(
+            f" mode: [b]{self.mode}[/]   preset: [b]{self.preset}[/]   length: [b]{dur}[/]"
+            f"{'   ● running' if self.session_running else ''}")
+        self.query_one("#hint", Static).update(f" {self.mode}: {MODE_HELP[self.mode]}")
+
     def _log(self, msg: str):
         self.query_one("#log", Log).write_line(msg)
 
-    def _set_progress(self, frac: float, note: str):
-        self.query_one("#dl", ProgressBar).update(progress=int(frac * 100))
-        if note in ("converting", "done"):
-            self._log(f"download: {note}")
+    def _set_progress(self, frac, note):
+        if note in ("converting", "done") or int(frac * 100) % 20 == 0:
+            self._log(f"download {int(frac*100):3d}%  {note}")
 
-    # ---------- search ----------
-    @on(Input.Submitted, "#query")
-    def _on_query(self, e: Input.Submitted):
-        if e.value.strip():
-            self.do_search(e.value.strip(), "songs")
+    # ---------- list population ----------
+    def _show_recommended(self):
+        self.view = "recommended"
+        ol = self.query_one("#list", OptionList)
+        ol.clear_options()
+        ol.add_options([Option(f"★ {lbl}", id=f"rec:{i}")
+                        for i, (lbl, _) in enumerate(music.RECOMMENDED)])
+        ol.highlighted = 0
 
-    @on(ListView.Selected, "#recommended")
-    def _on_rec(self, e: ListView.Selected):
-        idx = int(e.item.id.removeprefix("rec"))
-        lbl, query, kind = music.RECOMMENDED[idx]
-        self.query_one("#query", Input).value = query
-        self.do_search(query, kind)
+    def _show_results(self, tracks):
+        self.view = "results"
+        self.tracks = tracks
+        ol = self.query_one("#list", OptionList)
+        ol.clear_options()
+        if not tracks:
+            ol.add_option(Option("(no results — press / to search again)", id="none"))
+        else:
+            for i, t in enumerate(tracks):
+                dur = f"  [{t.duration}]" if t.duration else ""
+                ol.add_option(Option(f"{t.title[:46]}  ·  {t.artist[:26]}{dur}", id=f"trk:{i}"))
+            ol.highlighted = 0
+        ol.focus()
 
-    @work(thread=True, exclusive=True, group="search")
-    def do_search(self, query: str, kind: str):
-        self.call_from_thread(self._log, f"searching: {query!r} ({kind}) …")
-        try:
-            tracks = music.search(query, kind=kind, limit=20)
-        except Exception as ex:
-            self.call_from_thread(self._log, f"search failed: {ex}")
-            return
-        self.call_from_thread(self._fill_results, tracks)
+    # ---------- actions ----------
+    def action_recommended(self):
+        self._show_recommended()
+        self.query_one("#list", OptionList).focus()
 
-    def _fill_results(self, tracks):
-        t = self.query_one("#results", DataTable)
-        t.clear()
-        self.rows.clear()
-        for tr in tracks:
-            key = t.add_row(tr.title[:40], tr.artist[:24], tr.duration)
-            self.rows[key] = tr
-        self._log(f"{len(tracks)} results.")
+    def action_search(self):
+        s = self.query_one("#search", Input)
+        s.add_class("on")
+        s.focus()
 
-    @on(DataTable.RowSelected, "#results")
-    def _on_row(self, e: DataTable.RowSelected):
-        tr = self.rows.get(e.row_key)
-        if tr:
-            self.selected = tr
-            self.query_one("#selected", Static).update(f"▶ {tr.label}")
+    def action_escape(self):
+        s = self.query_one("#search", Input)
+        if s.has_class("on"):
+            s.remove_class("on")
+        self.query_one("#list", OptionList).focus()
 
-    # ---------- run / stop ----------
-    @on(Button.Pressed, "#run")
-    def _on_run(self, _):
-        if self.session_running:
-            self._log("a session is already running (press Stop first).")
-            return
-        mode = self.query_one("#mode", Select).value
-        preset = self.query_one("#preset", Select).value
-        mins_raw = self.query_one("#minutes", Input).value.strip()
-        minutes = float(mins_raw) if mins_raw else None
-        if mode in ("music", "reactive") and not self.selected:
-            self._log("select a track first (this mode needs audio).")
-            return
-        self.run_session(mode, preset, minutes)
+    def action_mode(self):
+        self.mode = MODES[(MODES.index(self.mode) + 1) % len(MODES)]
+        self._refresh_status()
 
-    @on(Button.Pressed, "#stop")
-    def action_stop(self, *_):
+    def action_preset(self):
+        self.preset = PRESETS[(PRESETS.index(self.preset) + 1) % len(PRESETS)]
+        self._refresh_status()
+
+    def action_duration(self):
+        self.minutes = DURATIONS[(DURATIONS.index(self.minutes) + 1) % len(DURATIONS)]
+        self._refresh_status()
+
+    def action_down(self):
+        self.query_one("#list", OptionList).action_cursor_down()
+
+    def action_up(self):
+        self.query_one("#list", OptionList).action_cursor_up()
+
+    def action_stop(self):
         if self.session_running:
             self.workers.cancel_group(self, "session")
             self._log("stopping…")
 
-    @work(thread=True, exclusive=True, group="download")
-    def _download_then(self, video_id, mode, preset, minutes):
+    # ---------- events ----------
+    @on(Input.Submitted, "#search")
+    def _submit(self, e: Input.Submitted):
+        q = e.value.strip()
+        self.query_one("#search", Input).remove_class("on")
+        if q:
+            self.do_search(q)
+
+    @on(OptionList.OptionSelected, "#list")
+    def _selected(self, e: OptionList.OptionSelected):
+        oid = e.option.id or ""
+        if oid.startswith("rec:"):
+            _, q = music.RECOMMENDED[int(oid[4:])]
+            self.query_one("#search", Input).value = q
+            self.do_search(q)
+        elif oid.startswith("trk:"):
+            if self.session_running:
+                self._log("a session is running — press s to stop first.")
+                return
+            self.run_session(self.tracks[int(oid[4:])])
+
+    # ---------- search worker ----------
+    @work(thread=True, exclusive=True, group="search")
+    def do_search(self, query):
+        self.call_from_thread(self._log, f"searching: {query!r} …")
         try:
-            path = music.download(video_id, progress=lambda f, n:
-                                  self.call_from_thread(self._set_progress, f, n))
+            tracks = music.search_playable(query, limit=25)
+        except Exception as ex:
+            self.call_from_thread(self._log, f"search failed: {ex}")
+            return
+        self.call_from_thread(self._show_results, tracks)
+        self.call_from_thread(self._log, f"{len(tracks)} tracks — ↑↓ then Enter to run ({self.mode}).")
+
+    # ---------- run ----------
+    def run_session(self, track):
+        if self.mode in ("light", "isochronic"):
+            self.session(None, track)
+        else:
+            self._log(f"downloading: {track.label} …")
+            self._download_then(track)
+
+    @work(thread=True, exclusive=True, group="download")
+    def _download_then(self, track):
+        try:
+            path = music.download(track.video_id,
+                                  progress=lambda f, n: self.call_from_thread(self._set_progress, f, n))
         except Exception as ex:
             self.call_from_thread(self._log, f"download failed: {ex}")
             return
-        self.audio_path = path
         self.call_from_thread(self._log, f"downloaded: {os.path.basename(path)}")
-        self.call_from_thread(self._start_session_worker, mode, preset, minutes, path)
-
-    def run_session(self, mode, preset, minutes):
-        if mode in ("music", "reactive"):
-            self._log(f"downloading {self.selected.label} …")
-            self._download_then(self.selected.video_id, mode, preset, minutes)
-        else:
-            self._start_session_worker(mode, preset, minutes, None)
-
-    def _start_session_worker(self, mode, preset, minutes, path):
-        self.session(mode, preset, minutes, path)
+        self.call_from_thread(self.session, path, track)
 
     @work(exclusive=True, group="session")
-    async def session(self, mode, preset, minutes, path):
+    async def session(self, path, track):
         self.session_running = True
-        # default duration: match track for music modes, else preset default
-        if minutes is None and self.selected:
-            minutes = _dur_to_minutes(self.selected.duration)
-        self._log(f"connecting to Nova… (mode={mode}, preset={preset})")
+        self._refresh_status()
+        minutes = self.minutes
+        if minutes is None and track:
+            minutes = _dur_to_minutes(track.duration)
+        self._log(f"connecting to Nova… (mode={self.mode}, preset={self.preset})")
         try:
             nova = await Nova.connect(timeout=20.0)
         except Exception as ex:
-            self._log(f"connect failed: {ex}  (is it in pairing mode / flashing blue?)")
+            self._log(f"connect failed: {ex} — is it flashing blue (pairing mode)?")
             self.session_running = False
+            self._refresh_status()
             return
-        info = None
         try:
             info = await nova.read_info()
             self._log(f"connected: {info.model} fw {info.firmware} battery {info.battery}%")
 
             def tick(t, f, d, dur):
                 if int(t * 10) % 10 == 0:
-                    self.call_from_thread(self._log,
-                        f"  t={t:5.1f}/{dur:.0f}s  {f:5.2f} Hz  duty {d*100:4.1f}%")
+                    self.call_from_thread(self._log, f"  t={t:5.1f}/{dur:.0f}s  {f:5.2f} Hz  {d*100:4.1f}%")
 
-            segs = gen.PRESETS[preset](minutes) if minutes else gen.PRESETS[preset]()
-            if mode == "light":
+            segs = gen.PRESETS[self.preset](minutes) if minutes else gen.PRESETS[self.preset]()
+            if self.mode == "light":
                 await gen.play_segments(nova, segs, on_tick=tick)
-            elif mode == "music":
+            elif self.mode == "music":
                 await gen.play_with_audio(nova, segs, path, on_tick=tick)
-            elif mode == "isochronic":
-                wav = os.path.join(music.DEFAULT_MUSIC_DIR, f"_iso_{preset}.wav")
+            elif self.mode == "isochronic":
+                wav = os.path.join(music.DEFAULT_MUSIC_DIR, f"_iso_{self.preset}.wav")
                 os.makedirs(music.DEFAULT_MUSIC_DIR, exist_ok=True)
                 gen.synth_isochronic(segs, wav)
                 await gen.play_with_audio(nova, segs, wav, on_tick=tick)
-            elif mode == "reactive":
+            else:  # reactive
                 await gen.play_reactive(nova, path, on_tick=tick)
             self._log("session complete ✅")
         except asyncio.CancelledError:
-            self._log("session stopped.")
+            self._log("stopped.")
         except Exception as ex:
             self._log(f"session error: {ex}")
         finally:
@@ -232,6 +268,7 @@ class NovaTUI(App):
             finally:
                 await nova.disconnect()
             self.session_running = False
+            self._refresh_status()
 
 
 def main():

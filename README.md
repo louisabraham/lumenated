@@ -67,9 +67,12 @@ lumenated generate relax 10             # generated 10-min 'relax' light arc
 lumenated generate explore 12 song.mp3  # preset light alongside your music
 lumenated reactive song.mp3             # light reacts to a music file (duty <- envelope)
 lumenated iso explore 8                 # generated isochronic tones + matched light
-lumenated-tui                           # TUI: search + download music, then run a session
+lumenated-tui                           # keyboard TUI: search + download music, run a session
 # presets: relax | sleep | explore | energize
 ```
+
+TUI keys: `/` search · `↑↓`/`j`/`k` move · `Enter` select/run · `m` mode · `p` preset ·
+`d` length · `s` stop · `r` recommended · `q` quit.
 
 - `lumenated/core.py` — control library (strobe, commands, motion sensor, DSL session player).
 - `lumenated/generator.py` — presets, audio-reactive mode, isochronic synth.

@@ -18,18 +18,18 @@ DEFAULT_MUSIC_DIR = os.environ.get(
     "LUMENATED_MUSIC_DIR", os.path.join(os.getcwd(), "music"))
 
 # Curated starting points (see docs/GENERATOR_DESIGN.md §4): slow, spacious, emotionally
-# warm — pairs well with meditative flicker. (label, query, kind)
+# warm — pairs well with meditative flicker. (label, search-query) — searched as playable tracks.
 RECOMMENDED = [
-    ("Jon Hopkins — Music for Psychedelic Therapy", "Jon Hopkins Music for Psychedelic Therapy", "albums"),
-    ("Brian Eno — Ambient 1: Music for Airports", "Brian Eno Music for Airports", "albums"),
-    ("Stars of the Lid — Refinement of the Decline", "Stars of the Lid And Their Refinement of the Decline", "albums"),
-    ("Nils Frahm — Spaces", "Nils Frahm Spaces", "albums"),
-    ("Hania Rani — Esja", "Hania Rani Esja", "albums"),
-    ("Max Richter — Sleep", "Max Richter Sleep", "albums"),
-    ("Hammock — Departure Songs", "Hammock Departure Songs", "albums"),
-    ("Ólafur Arnalds — Island Songs", "Olafur Arnalds Island Songs", "albums"),
-    ("Ambient / Drone (playlist)", "ambient drone deep meditation", "playlists"),
-    ("Theta frame-drum (7 Hz feel)", "shamanic drumming theta meditation", "songs"),
+    ("Jon Hopkins — Music for Psychedelic Therapy", "Jon Hopkins Music for Psychedelic Therapy"),
+    ("Brian Eno — Music for Airports", "Brian Eno Music for Airports"),
+    ("Stars of the Lid — Refinement of the Decline", "Stars of the Lid Refinement of the Decline"),
+    ("Nils Frahm — Spaces", "Nils Frahm Spaces"),
+    ("Hania Rani — Esja", "Hania Rani Esja"),
+    ("Max Richter — Sleep", "Max Richter Sleep"),
+    ("Hammock — Departure Songs", "Hammock Departure Songs"),
+    ("Ólafur Arnalds — Island Songs", "Olafur Arnalds Island Songs"),
+    ("Ambient / drone (meditation)", "ambient drone deep meditation"),
+    ("Theta frame-drum (~7 Hz feel)", "shamanic drumming theta meditation"),
 ]
 
 
@@ -59,6 +59,22 @@ def search(query: str, kind: str = "songs", limit: int = 15) -> list[Track]:
         out.append(Track(vid, r.get("title", "?"), artist or r.get("author", ""),
                          r.get("duration", "") or "", r.get("resultType", kind)))
     return out
+
+
+def search_playable(query: str, limit: int = 20) -> list[Track]:
+    """Search for individually-playable tracks (songs, then videos as fallback).
+
+    Avoids the albums/playlists filters, whose results have no videoId and can't be
+    downloaded directly.
+    """
+    out = search(query, kind="songs", limit=limit)
+    if len(out) < 5:
+        seen = {t.video_id for t in out}
+        for t in search(query, kind="videos", limit=limit):
+            if t.video_id not in seen:
+                out.append(t)
+                seen.add(t.video_id)
+    return out[:limit]
 
 
 def download(video_id: str, outdir: str = DEFAULT_MUSIC_DIR, progress=None) -> str:
