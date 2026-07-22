@@ -1,32 +1,40 @@
 # Progress log
 
-## Known facts (from public sources + recon)
+## Status: protocol RE complete (static + dynamic). Live Mac-control test pending.
 
-- Nova = wearable light mask, **4 independently-controlled LEDs**, stroboscopic sequences.
-- Controls: play/pause + intensity from both the app and the device buttons.
-- **Group session**: up to 5 Novas synced to one phone.
-- Status LEDs: flashing white = searching for last device; solid blue = connected;
-  alternating blue/white = needs factory reset.
-- **OTA firmware update** via app (Settings > Lumenate Nova > Update Nova) → almost
-  certainly Nordic Secure DFU ⇒ **nRF52-class hardware**.
-- No public reverse-engineering of the protocol exists (checked 2026-07).
+## What we did
 
-## Hypotheses to confirm
+1. **Pulled + decompiled** the Android app `com.lumenate.lumenateaa` (jadx). Native
+   Kotlin app; flicker waveform generated in `libstrobecontroller-lib.so`.
+2. **Captured** a full session HCI snoop log (`captures/btsnoop-last.log`, 9903 ATT
+   packets, 4702 strobe frames) and analysed it with tshark.
+3. **Cross-verified** decompiled encoders (`D0.w0/s0/v0`, `jb.x`) against the captured
+   bytes — our frame encoder reproduces a real captured frame **byte-for-byte**.
+4. Wrote **docs/PROTOCOL.md** (full protocol) and **nova/** (Python control lib + demo).
 
-- Custom control service (possibly Nordic-UART-style: one write char + one notify char),
-  plus a Nordic DFU service (0000fe59 / 8ec9xxxx).
-- Session = either streamed brightness frames, or a pattern id + parameters the device
-  plays locally. The 1–2 min "warm up" hints the app may stream/schedule frames.
+## Confirmed protocol (see docs/PROTOCOL.md)
 
-## Environment
+- Advertises as **"Lumenate Nova"**; Nordic BLE stack; LESC pairing/bonding; MTU 498.
+- **Strobe** = stream 12-byte frames `[period_us, on_us, color]` (LE u32) to
+  `f2c51a4e-…` (svc `b568de7c-…`) write-without-response. freq 7–14 Hz, duty 1–70%,
+  color always 0. ~9 frames/s.
+- **Command** `[id,arg]` to `3e25a3bf-…` (svc `47bbfb1e-…`): 0x01 = Welcome LEDs.
+- **Offline session** `[mode]` to `2a84aaff-…` (svc `3e8ec328-…`): 0/1/2 = relaxed/explore/sleep.
+- **Buttons** notify `[0x01,event]` on `964fbffe-…`: 0/1/2 = power/bright+/bright-.
+- **Sensor** notify 3×int16 LE on `12345678-…`. Battery 0x2A19; device info 0x2A24-27.
 
-- Mac: Python 3.14 + bleak installed; jadx installed; tshark installed; adb installed.
-- nRF52840 MDK: NOT currently seen on USB (would be a sniffer fallback anyway).
-- Android phone: not yet connected via adb.
+## Next: live control from the Mac
 
-## Next steps
+Needs the physical Nova **connectable from the Mac**. Because it bonds to one central and
+is currently bonded to the phone:
+1. Ensure it's not connected to the phone app (LED flashing white). Try `python3 nova/demo.py scan`.
+2. If it won't connect/pair (still bonded to phone), **factory-reset** the Nova (LED
+   alternates blue/white), then retry — CoreBluetooth will Just-Works pair.
+3. Validate: `info` → `welcome` → `strobe 10 0.3` → `ramp` → `monitor`.
 
-1. [blocked: phone] Pull APK, decompile, extract UUIDs + command encoders.
-2. [blocked: phone] HCI snoop log while exercising each app feature.
-3. Enumerate Nova GATT from Mac (needs Nova in connectable/unbonded state).
-4. Write protocol doc + Python control demo.
+## Open questions
+
+- Does the strobe stream need a keep-alive, or does one frame flash indefinitely? (demo
+  re-sends to be safe; confirm live.)
+- Exact semantics of the sensor stream (looks like accelerometer). Non-essential.
+- The 2 unmapped command-service chars (0x001e–0x001f) — possibly OTA/DFU.
