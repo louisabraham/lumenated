@@ -1,0 +1,7 @@
+apk/
+captures/
+__pycache__/
+*.pyc
+.venv/
+*.log
+*.apk
