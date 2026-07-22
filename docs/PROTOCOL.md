@@ -6,8 +6,9 @@ session HCI snoop capture. Confirmed values are marked ✅; inferences are marke
 ## 1. Hardware & overview
 
 - Wearable stroboscopic **light mask, 4 LEDs**. SoC = **Nordic nRF52833** (read live from
-  the Model Number char) ✅; Nordic `no.nordicsemi.android.ble` client stack + Nordic-style
-  DFU + blue/white status LED. Test unit: firmware `1.0.4`, hardware `1.0`.
+  the Model Number char) ✅; manufacturer **"Oxalis Design"** (Manufacturer Name char);
+  Nordic `no.nordicsemi.android.ble` client stack + Nordic-style DFU + blue/white status LED.
+  Test unit: firmware `1.0.4`, hardware `1.0`.
 - Advertises as local name **`Lumenate Nova`** ✅. The app scans with a `ScanFilter`
   on a service UUID ⓘ; filtering by name works too.
 - **The flicker waveform is generated on the phone**, not the device. A native library
@@ -69,7 +70,7 @@ Full table read from the connected Nova. **Address by UUID** (handles vary by fi
 | Battery `0x180F` | `0x2A19` | Battery level % (read/notify) ✅ |
 | | `0x2BED` | (extra, read/notify/indicate) ⓘ |
 | Device Info `0x180A` | `0x2A24` | Model number → `nrf52833` ✅ |
-| | `0x2A29` | Manufacturer name |
+| | `0x2A29` | Manufacturer name → `Oxalis Design` ✅ |
 | | `0x2A25` | Serial number → used as the device id ✅ |
 | | `0x2A26` | Firmware revision → `1.0.4` ✅ |
 | | `0x2A27` | Hardware revision → `1.0` ✅ |
@@ -129,6 +130,9 @@ The header char `51bfc219-…` reports 16 bytes (`NovaOfflineSessionHeader`, all
 ```
 [ magic , version , sessionCount , activeSessionIndex ]
 ```
+Live read ✅: `magic=0x4F464C4E` ("NLFO"), `version=1`, `sessionCount=0`, `activeSessionIndex=255`
+(no offline session stored on the test unit). The mode char `2a84aaff-…` read back `0xFF`
+(NOT_SET) when idle.
 
 ## 7. Remote / button events ✅
 
@@ -147,8 +151,10 @@ To turn it on:
    Writing `0x00` turns streaming off.
 2. Subscribe to notifications on `12345678-…` (strobe service).
 
-Each notification is 6 bytes = **3 × signed int16 LE** `(x, y, z)` — an accelerometer/orientation
-reading (used to detect head movement during a session). Streamed at ~10–12 Hz.
+Each notification is 6 bytes = **3 × signed int16 LE** `(x, y, z)` — a 3-axis **accelerometer**
+(confirmed live: values swing sharply with motion; at rest |(x,y,z)| ≈ 4096 = 1 g ⇒ **±8 g scale,
+~4096 LSB/g**). Used to detect head movement during a session. The rate byte written to
+`abcdef01-…` is the **sample rate in Hz** (verified: rate 20 → ~19.4 samples/s).
 
 ## 9. Group sessions
 
@@ -201,9 +207,9 @@ Not fully exercised (bricking risk), but the mechanism is clear from the app:
 
 ## Reserved / unused characteristics
 
-Present in firmware but **not driven by this app version** (safe to ignore for control):
-`2b35ef1f-…` (command svc), `0x2BED` (battery svc). Their live values weren't captured; read them
-with `tools/probe.py` when the device is awake if you're curious.
+Present in firmware but **not driven by this app version** (safe to ignore for control). Live
+values read from the test unit ✅: `2b35ef1f-…` (command svc) = `0x2b`; `0x2BED` (battery svc) =
+`00 00 00`. Both are static — nothing dynamic hides there.
 
 ## 12. Reproduce the analysis
 
