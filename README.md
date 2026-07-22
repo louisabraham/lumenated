@@ -76,12 +76,16 @@ lumenated iso explore 8                 # generated isochronic tones + matched l
 lumenated-play
 ```
 
-A minimal, keyboard-only wizard — one question at a time, with arrow-key menus (↑↓/j/k,
-Enter, 1-9 to jump). Flow: **mode → (music, only for audio modes) → preset & length (skipped
-for `reactive`, where the music drives the light) → connect the Nova**. Pairing is the last
-step, with instructions + a retry loop. Then **press the Nova's power button to start**;
-**power or space pauses/resumes** (audio and light freeze together); **q / esc / Ctrl-C quits**
-— just like the app.
+A minimal, keyboard-only wizard — one decision at a time. Navigate menus with **↑↓ / j k**,
+**→ or Enter** to go forward, **← to go back**, 1-9 to jump. Flow:
+
+1. **Sound** — search a track · a suggested track · generated tones · none
+2. **Light** — *reactive* (tracks the music) vs a designed *journey* — asked only when there's a track
+3. **Journey** — which light preset (skipped for reactive; there the music drives the light)
+4. **Connect the Nova** — the last step, with pairing instructions + a retry loop
+
+Then **press the Nova's power button to start**; **power or space pauses/resumes** (light and
+audio freeze together); **q / esc / Ctrl-C quits** — just like the app.
 
 - `lumenated/core.py` — control library (strobe, commands, motion sensor, DSL session player).
 - `lumenated/generator.py` — presets, audio-reactive mode, isochronic synth.

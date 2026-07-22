@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Minimal interactive session setup for the Lumenate Nova.
 
-A short sequential prompt — one decision at a time:
-  1. Mode  (only audio modes then ask you to choose music)
-  2. Preset
-  3. Length
+A short sequential prompt — one decision at a time (← back · →/enter forward · q quit):
+  1. Sound   — search a track · a suggested track · generated tones · none
+  2. Light   — reactive vs a designed journey (only asked when there's a track)
+  3. Journey — which light preset (skipped for reactive; the music drives it there)
   4. Connect the Nova (last step; with pairing instructions + retry)
   5. Press the Nova's power button to start; power or space to pause/resume;
      q / esc / Ctrl-C to quit — as in the app.
@@ -38,22 +38,19 @@ def accent(s): return _c(s, "36")       # cyan
 def ok(s): return _c(s, "32")           # green
 
 
-MODES = [
-    ("reactive", "light follows the music's loudness"),
-    ("music", "generated light preset alongside your track"),
-    ("light", "generated light preset only — no audio"),
-    ("isochronic", "generated tones phase-locked to the light — no download"),
-]
 PRESET_DESC = {
-    "relax": "settle to ~10 Hz alpha, breathe, ease out",
-    "sleep": "wind down from alpha to delta, fade to dark",
-    "explore": "theta↔alpha journey with slow drift",
-    "energize": "higher, alerting band (keep it short)",
+    "relax": "fade in, hold ~10 Hz alpha, breathe intensity, ease out — calm & vivid",
+    "sleep": "drift 12→3 Hz over the session, dimming to dark — for winding down",
+    "explore": "wander theta↔alpha (~7–11 Hz) with slow drift — dreamy, exploratory",
+    "energize": "brighter, faster 10→14 Hz — alerting (best kept short)",
 }
 
 
 class Abort(Exception):
     pass
+
+
+BACK = object()  # sentinel returned by a step when the user goes back (←)
 
 
 def _read(prompt: str) -> str:
@@ -80,18 +77,19 @@ def _getkey() -> str:
         if ch == "\x1b":  # escape sequence (arrows) or a lone Esc
             if select.select([fd], [], [], 0.05)[0]:
                 rest = os.read(fd, 2).decode(errors="ignore")
-                return {"[A": "up", "[B": "down"}.get(rest, "esc")
+                return {"[A": "up", "[B": "down",
+                        "[C": "right", "[D": "left"}.get(rest, "esc")
             return "esc"
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def choose(title: str, options, default: int = 0) -> int:
-    """Single-choice menu. options = [(name, description)]. Returns the index.
+def choose(title: str, options, default: int = 0, allow_back: bool = True):
+    """Single-choice menu. options = [(name, description)]. Returns the index, or BACK.
 
-    Interactive (TTY): arrow keys / j / k to move, Enter to select, 1-9 to jump, q/Esc
-    to cancel. Non-TTY: falls back to a plain numbered prompt.
+    Interactive (TTY): ↑↓ / j k to move, → or Enter to select, ← to go back, 1-9 to jump,
+    q / Esc to quit. Non-TTY: plain numbered prompt (no back).
     """
     width = max((len(n) for n, _ in options), default=0)
 
@@ -107,8 +105,9 @@ def choose(title: str, options, default: int = 0) -> int:
                 return int(raw) - 1
             print(dim("  enter a number from the list"))
 
-    print(f"\n{bold(title)}   "
-          f"{dim(f'↑↓ move · enter select · 1-{min(9, len(options))} jump · q cancel')}")
+    keys = "↑↓ move · → / enter select" + (" · ← back" if allow_back else "") \
+           + f" · 1-{min(9, len(options))} jump · q quit"
+    print(f"\n{bold(title)}   {dim(keys)}")
     sel = default
 
     def render(first: bool):
@@ -132,8 +131,11 @@ def choose(title: str, options, default: int = 0) -> int:
                 sel = (sel - 1) % len(options); render(False)
             elif k in ("down", "j"):
                 sel = (sel + 1) % len(options); render(False)
-            elif k in ("\r", "\n"):
+            elif k in ("\r", "\n", "right"):
                 return sel
+            elif k == "left":
+                if allow_back:
+                    return BACK
             elif k.isdigit() and 1 <= int(k) <= len(options):
                 return int(k) - 1
             elif k == "\x03":  # Ctrl-C
@@ -154,26 +156,37 @@ def ask(prompt: str, default: str | None = None) -> str:
 # --------------------------------------------------------------------------
 # Music selection (only for modes that use audio)
 # --------------------------------------------------------------------------
-def pick_track():
+def pick_track(suggested: bool):
+    """Return a Track, or BACK. suggested=True offers the curated list first."""
     from . import music
+    query = None
     while True:
-        q = ask("\n" + bold("Music") + " — search YouTube Music" + dim(" (blank = suggestions)"))
-        if not q:
-            idx = choose("Suggestions", [(lbl, "") for lbl, _ in music.RECOMMENDED])
-            q = music.RECOMMENDED[idx][1]
-        print(dim(f"  searching {q!r} …"))
+        if query is None:
+            if suggested:
+                idx = choose("Suggested music", [(lbl, "") for lbl, _ in music.RECOMMENDED])
+                if idx is BACK:
+                    return BACK
+                query = music.RECOMMENDED[idx][1]
+            else:
+                q = ask("\n" + bold("Search") + " YouTube Music" + dim("  (empty = back)"))
+                if not q:
+                    return BACK
+                query = q
+        print(dim(f"  searching {query!r} …"))
         try:
-            tracks = music.search_playable(q, limit=10)
+            tracks = music.search_playable(query, limit=12)
         except Exception as ex:
             print(dim(f"  search failed: {ex}"))
+            query = None
             continue
         if not tracks:
-            print(dim("  no results — try another search"))
+            print(dim("  no results"))
+            query = None
             continue
-        opts = [(f"{t.title[:44]}", f"{t.artist[:22]}  {t.duration}") for t in tracks]
-        opts.append(("search again", ""))
+        opts = [(t.title[:44], f"{t.artist[:22]}  {t.duration}") for t in tracks]
         idx = choose("Results", opts)
-        if idx == len(tracks):
+        if idx is BACK:
+            query = None       # ← back to the search box / suggestion list
             continue
         return tracks[idx]
 
@@ -352,36 +365,92 @@ async def connect_and_run(mode, preset, minutes, path):
             await nova.disconnect()
 
 
+# --------------------------------------------------------------------------
+# Steps  (each returns a value, or BACK)
+# --------------------------------------------------------------------------
+def step_music():
+    """Choose the sound source. Returns {"source", "track"} (never BACK — first step)."""
+    while True:
+        idx = choose("Sound", [
+            ("search", "find a track on YouTube Music"),
+            ("suggested", "pick from a curated ambient / meditative list"),
+            ("generated", "synthesised isochronic tones (phase-locked) — no download"),
+            ("none", "no sound — light only"),
+        ], allow_back=False)
+        kind = ["search", "suggested", "generated", "none"][idx]
+        if kind == "generated":
+            return {"source": "generated", "track": None}
+        if kind == "none":
+            return {"source": "none", "track": None}
+        track = pick_track(suggested=(kind == "suggested"))
+        if track is BACK:
+            continue
+        return {"source": "track", "track": track}
+
+
+def step_light():
+    """When there's a track: reactive vs generated. Returns True (reactive)/False, or BACK."""
+    idx = choose("Light", [
+        ("reactive", "the light tracks the music's loudness live (rhythmic flicker)"),
+        ("generated", "a designed light 'journey' plays alongside the music"),
+    ])
+    return BACK if idx is BACK else (idx == 0)
+
+
+def step_preset():
+    """Pick the generated-light journey. Returns a preset name, or BACK."""
+    idx = choose("Light journey", [(p, PRESET_DESC[p]) for p in gen.PRESETS])
+    return BACK if idx is BACK else list(gen.PRESETS)[idx]
+
+
 def main():
-    print(bold("lumenated") + dim(" · session setup"))
+    print(bold("lumenated") + dim(" · session setup") + dim("   (←/→ back·forward, q quit)"))
     try:
-        mode = MODES[choose("Mode", MODES)][0]
+        data, state = {}, "music"
+        while state != "run":
+            if state == "music":
+                data.update(step_music())      # first step, no BACK
+                state = "light"
+            elif state == "light":
+                if data["source"] != "track":  # generated / none → light is automatic
+                    data["reactive"] = False
+                    state = "preset"
+                else:
+                    r = step_light()
+                    if r is BACK:
+                        state = "music"
+                    else:
+                        data["reactive"] = r
+                        state = "run" if r else "preset"   # reactive skips the preset
+            elif state == "preset":
+                r = step_preset()
+                if r is BACK:
+                    state = "light" if data["source"] == "track" else "music"
+                else:
+                    data["preset"] = r
+                    state = "run"
 
-        track = path = None
-        if mode in ("reactive", "music"):
-            track = pick_track()
-
-        # Preset & length only matter for the generated light arc (light/music/isochronic).
-        # In reactive mode the music's envelope drives the light, so we skip both.
-        if mode == "reactive":
-            preset, minutes = "relax", None  # unused by reactive
+        # ---- derive mode / duration / audio ----
+        src = data["source"]
+        track = data.get("track")
+        preset = data.get("preset", "relax")
+        if src == "track":
+            mode = "reactive" if data["reactive"] else "music"
+            minutes = _dur_to_minutes(track.duration) if mode == "music" else None
+        elif src == "generated":
+            mode, minutes = "isochronic", None
         else:
-            preset = list(gen.PRESETS)[
-                choose("Preset", [(p, PRESET_DESC[p]) for p in gen.PRESETS])]
-            mr = ask("\n" + bold("Length") + " in minutes"
-                     + dim(" (blank = match track / preset)"))
-            minutes = float(mr) if mr else None
+            mode, minutes = "light", None
 
         bits = [accent(mode)]
         if mode != "reactive":
-            bits += [accent(preset), f"{minutes:g} min" if minutes else "auto"]
+            bits.append(accent(preset))
         if track:
             bits.append(f"“{track.title}”")
         print("\n  " + dim("→ ") + "  ·  ".join(bits))
 
-        # prepare audio before pairing so the session can start the instant you press the button
-        if track:
-            path = download(track)
+        # fetch audio before pairing so the session starts the instant you press the button
+        path = download(track) if track else None
 
         asyncio.run(connect_and_run(mode, preset, minutes, path))
     except Abort:
